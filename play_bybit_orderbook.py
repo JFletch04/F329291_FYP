@@ -3,7 +3,7 @@
 Bybit orderbook dump player (orderbook.200.*)
 
 Usage:
-  python play_bybit_orderbook.py 2025-11-03_BTCUSDT_ob200.data --levels 5 --speed 10
+  python play_bybit_orderbook.py 2026-01-01_BTCUSDT_ob200.data --levels 5 --speed 1000
 
 Controls:
   - Ctrl+C to stop
