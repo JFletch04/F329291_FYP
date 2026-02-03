@@ -3,7 +3,7 @@
 Bybit orderbook dump player (orderbook.200.*)
 
 Usage:
-  python play_bybit_orderbook.py 2026-01-01_BTCUSDT_ob200.data --levels 5 --speed 1000
+  python play_bybit_orderbook.py 2025-12-01_DOGEUSDT_ob200.data --levels 5 --speed 10
 
 Controls:
   - Ctrl+C to stop
@@ -108,8 +108,8 @@ def render(
         a_sz_str = fmt_num(a_sz, width=14, prec=6) if a_sz is not None else " " * 14
         b_sz_str = fmt_num(b_sz, width=14, prec=6) if b_sz is not None else " " * 14
 
-        a_px_str = fmt_num(a_px, width=14, prec=2) if a_px is not None else " " * 14
-        b_px_str = fmt_num(b_px, width=14, prec=2) if b_px is not None else " " * 14
+        a_px_str = fmt_num(a_px, width=14, prec=5) if a_px is not None else " " * 14
+        b_px_str = fmt_num(b_px, width=14, prec=5) if b_px is not None else " " * 14
 
         print(f"{a_sz_str} {a_px_str} | {b_px_str} {b_sz_str}")
 
