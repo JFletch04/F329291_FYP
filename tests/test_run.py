@@ -1,3 +1,5 @@
+from exec_env import ExecEnv
+
 env = ExecEnv("/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet")
 obs, _ = env.reset()
 
