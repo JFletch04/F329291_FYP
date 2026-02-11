@@ -121,7 +121,15 @@ class ExecEnv(gym.Env):
         return self._obs(), {}
 
     def step(self, action):
-        a = float(np.clip(action[0], 0.0, 1.0))
+
+        # Accept action as scalar OR array-like (Gym sometimes passes scalar)
+        if np.isscalar(action):
+            a0 = float(action)
+        else:
+            a0 = float(np.asarray(action).reshape(-1)[0])
+
+        a = float(np.clip(a0, 0.0, 1.0))
+
         idx = self.start_idx + self.t
         row = self._get_row(idx)
 

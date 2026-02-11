@@ -7,12 +7,7 @@ from typing import Dict, List, Tuple, Optional
 import pandas as pd
 
 
-MS = 1000
 GRID_MS = 5_000  # 5 seconds
-
-
-def floor_to_grid(ts_ms: int, grid_ms: int = GRID_MS) -> int:
-    return (ts_ms // grid_ms) * grid_ms
 
 
 def ceil_to_grid(ts_ms: int, grid_ms: int = GRID_MS) -> int:

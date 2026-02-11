@@ -18,30 +18,59 @@ class PolicyStep:
 
 class LSTMPolicy:
     """
-    Holds the TF model + the current LSTM state for ONE environment.
+    Wrapper around TF recurrent actor-critic.
 
-    You reset() it at episode start.
-    You step(obs) to get action + diagnostics and update hidden state.
+    Supports:
+      - reset(): reset internal state for 1 env
+      - step(obs): uses internal state, updates it, returns PolicyStep (for training/collection)
+      - initial_state(batch_size): passthrough to model.initial_state
+      - act(obs, h, c): stateless call used by evaluation code (does NOT change internal state)
     """
 
     def __init__(self, model: RecurrentActorCritic):
         self.model = model
         self.state: Optional[Tuple[tf.Tensor, tf.Tensor]] = None
 
+    def initial_state(self, batch_size: int = 1) -> Tuple[tf.Tensor, tf.Tensor]:
+        return self.model.initial_state(batch_size=batch_size)
+
     def reset(self):
         self.state = self.model.initial_state(batch_size=1)
 
+    def act(
+        self,
+        obs: np.ndarray,
+        h: tf.Tensor,
+        c: tf.Tensor,
+        deterministic: bool = False,
+    ):
+        """
+        Stateless action call used by evaluation scripts.
+
+        Returns exactly what test_best_ppo_lstm expects:
+        action (np array shape (1,)),
+        logp (float),
+        value (float),
+        (next_h, next_c)
+        """
+        obs_tf = tf.convert_to_tensor(obs, dtype=tf.float32)
+        a, raw_u, logp, v, (h2, c2) = act_step(self.model, obs_tf, (h, c), deterministic)
+
+        action = np.array([float(a)], dtype=np.float32)  # <-- key line (makes action[0] valid)
+        return action, float(logp), float(v), (h2, c2)
+
+
     def step(self, obs: np.ndarray, deterministic: bool = False) -> PolicyStep:
         """
-        obs: np.ndarray shape (obs_dim,)
-        returns: PolicyStep (includes state BEFORE acting, useful for training)
+        Uses and updates INTERNAL state (used by collector).
         """
         if self.state is None:
             self.reset()
 
-        # Save state BEFORE acting (needed for training chunks)
         h, c = self.state
-        h_np = h.numpy().reshape(-1)  # (lstm_units,)
+
+        # Save state BEFORE acting (needed for training chunks)
+        h_np = h.numpy().reshape(-1)
         c_np = c.numpy().reshape(-1)
 
         obs_tf = tf.convert_to_tensor(obs, dtype=tf.float32)
@@ -56,3 +85,4 @@ class LSTMPolicy:
             state_h=h_np.astype(np.float32),
             state_c=c_np.astype(np.float32),
         )
+
