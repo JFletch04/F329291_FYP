@@ -41,6 +41,7 @@ class RecurrentActorCritic(tf.keras.Model):
         c = tf.zeros((batch_size, self.lstm_units), dtype=tf.float32)
         return (h, c)
 
+    #How the neural network transforms observations (and memory) into policy and value outputs.
     def call(self, obs_seq, initial_state=None, training=False):
         """
         obs_seq: [B, T, obs_dim]
@@ -95,8 +96,8 @@ def act_step(model: RecurrentActorCritic, obs_t, state, deterministic: bool):
     """
     obs_seq = tf.reshape(obs_t, (1, 1, model.obs_dim))  # [B=1, T=1, obs_dim]
     mu, log_std, v, next_state = model(obs_seq, initial_state=state, training=False)
-    mu = mu[:, :, :]   # [1,1,1]
-    v = tf.squeeze(v, axis=[0, 1, 2])  # scalar
+    mu = mu[:, :, :]   # [1,1,1] does nothing
+    v = tf.squeeze(v, axis=[0, 1, 2])  # scalar, converts [B, T, 1], to [1]
 
     if deterministic:
         raw_u = mu

@@ -5,9 +5,9 @@ from datetime import datetime
 from build_replay_day import build_replay_day  # adjust import if needed
 
 
-LOB_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_LOB/November")
-TRADES_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_trades/November")
-OUT_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/replay_5s")
+LOB_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/DOGEUSDT_LOB/January")
+TRADES_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/DOGEUSDT_trades/January")
+OUT_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/replay_5s_DOGE")
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 

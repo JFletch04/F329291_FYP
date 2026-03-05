@@ -1,3 +1,5 @@
+# data/splits.py
+
 from pathlib import Path
 from typing import List, Tuple
 
@@ -12,7 +14,7 @@ def make_time_split(
     nov_dir: str,
     dec_dir: str,
     jan_dir: str,
-    jan_val_days: int = 7
+    jan_val_days: int = 7,
 ) -> Tuple[List[str], List[str], List[str]]:
     nov = list_parquets(nov_dir)
     dec = list_parquets(dec_dir)
@@ -23,3 +25,20 @@ def make_time_split(
     test_files = jan[jan_val_days:]
 
     return train_files, val_files, test_files
+
+
+def make_time_split_from_root(
+    data_root: str,
+    jan_val_days: int = 7,
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Expects:
+      <data_root>/November/*.parquet
+      <data_root>/December/*.parquet
+      <data_root>/January/*.parquet
+    """
+    root = Path(data_root)
+    nov_dir = str(root / "November")
+    dec_dir = str(root / "December")
+    jan_dir = str(root / "January")
+    return make_time_split(nov_dir, dec_dir, jan_dir, jan_val_days=jan_val_days)

@@ -52,6 +52,7 @@ class Book:
         self.has_snapshot: bool = False
 
     def apply_snapshot(self, bids: List[List[str]], asks: List[List[str]]):
+        #clear the previous existing book
         self.bids.clear()
         self.asks.clear()
         for p_str, s_str in bids:
@@ -84,6 +85,7 @@ class Book:
             else:
                 self.asks[p] = s
 
+    #get the best bid from the bid and ask price, returns optinally, a tuple of floats as we converted to floats ealier
     def best_bid_ask(self) -> Tuple[Optional[float], Optional[float]]:
         if not self.bids or not self.asks:
             return None, None
@@ -116,6 +118,7 @@ def load_trades_csv(trades_csv_path: str) -> pd.DataFrame:
     df["side"] = df["side"].astype(str)
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
+
 
 
 def build_replay_day(
@@ -239,8 +242,8 @@ def build_replay_day(
 
 if __name__ == "__main__":
     # TODO: Set these paths for your Jan 1 files
-    LOB_JSONL = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_LOB/January/2026-01-01_BTCUSDT_ob200.data"
-    TRADES_CSV = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_trades/January/BTCUSDT_2026-01-01.csv"
+    LOB_JSONL = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_LOB/January/2026-01-01_DOGEUSDT_ob200.data"
+    TRADES_CSV = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_trades/January/DOGEUSDT_2026-01-01.csv"
     OUT_PARQUET = "/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet"
 
     build_replay_day(

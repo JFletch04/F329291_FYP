@@ -1,7 +1,10 @@
+# env/exec_env.py
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import pandas as pd
+
 
 def walk_book_market(qty, prices, sizes):
     filled = 0.0
@@ -26,7 +29,7 @@ class ExecEnv(gym.Env):
         replay_parquet_path: str,
         horizon_steps: int = 180,
         side: str = "buy",
-        target_qty: float = 0.5,      # base units for now
+        target_qty: float = 0.5,      # base units (DOGE/BTC units depending on dataset)
         max_child_qty: float = 0.05,  # cap per step
         pov_cap: float = 0.10,        # <= 10% of last 5s traded volume
         taker_fee_rate: float = 0.0,
@@ -35,7 +38,7 @@ class ExecEnv(gym.Env):
         super().__init__()
         self.df = pd.read_parquet(replay_parquet_path).reset_index(drop=True)
 
-        self.horizon_steps = horizon_steps
+        self.horizon_steps = int(horizon_steps)
         self.side = side.lower()
         self.target_qty = float(target_qty)
         self.max_child_qty = float(max_child_qty)
@@ -45,9 +48,7 @@ class ExecEnv(gym.Env):
         self.rng = np.random.default_rng(seed)
 
         # Observation: [spread, trade_vol, signed_vol, imbalance, ret_1, remaining_frac, time_remaining_frac]
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32
-        )
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
 
         # Action: fraction of remaining to trade now
         self.action_space = spaces.Box(
@@ -84,8 +85,6 @@ class ExecEnv(gym.Env):
         return float((m1 - m0) / (m0 + 1e-12))
 
     def _obs(self):
-
-        # Clamp idx to valid range inside the episode window
         idx = self.start_idx + min(self.t, self.horizon_steps - 1)
         row = self._get_row(idx)
 
@@ -95,19 +94,23 @@ class ExecEnv(gym.Env):
         imb = self._imbalance_top5(row)
         ret1 = self._ret_1(idx)
 
-        remaining_frac = float(self.remaining_qty / self.target_qty)
+        remaining_frac = float(self.remaining_qty / self.target_qty) if self.target_qty > 0 else 0.0
         time_remaining_frac = float((self.horizon_steps - self.t) / self.horizon_steps)
 
-        obs = np.array(
+        return np.array(
             [spread, trade_vol, signed_vol, imb, ret1, remaining_frac, time_remaining_frac],
             dtype=np.float32,
         )
-        return obs
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
         max_start = len(self.df) - self.horizon_steps - 1
+        if max_start <= 1:
+            raise RuntimeError(
+                f"Parquet too short for horizon_steps={self.horizon_steps}: rows={len(self.df)}"
+            )
+
         self.start_idx = int(self.rng.integers(1, max_start))  # start at >=1 for ret_1
         self.t = 0
 
@@ -121,8 +124,7 @@ class ExecEnv(gym.Env):
         return self._obs(), {}
 
     def step(self, action):
-
-        # Accept action as scalar OR array-like (Gym sometimes passes scalar)
+        # Accept action as scalar OR array-like
         if np.isscalar(action):
             a0 = float(action)
         else:
@@ -140,7 +142,7 @@ class ExecEnv(gym.Env):
         child_qty = a * self.remaining_qty
         child_qty = min(child_qty, self.max_child_qty)
 
-        # POV cap (avoid unrealistically large trades)
+        # POV cap
         if trade_vol > 0:
             child_qty = min(child_qty, self.pov_cap * trade_vol)
 
@@ -154,7 +156,7 @@ class ExecEnv(gym.Env):
 
         filled, fill_price = walk_book_market(child_qty, prices, sizes)
 
-        # Update totals
+        step_cost = 0.0
         if filled > 0:
             self.remaining_qty -= filled
             self.filled_total += filled
@@ -162,17 +164,15 @@ class ExecEnv(gym.Env):
 
             fee_cash = self.taker_fee_rate * (filled * fill_price)
 
-            # Per-step cost vs current mid (stable learning signal)
+            # Per-step cost vs current mid
             if self.side == "buy":
                 step_cost = filled * (fill_price - mid_t) + fee_cash
             else:
                 step_cost = filled * (mid_t - fill_price) + fee_cash
 
             self.is_cash_total += step_cost
-        else:
-            step_cost = 0.0
 
-        # Reward (negative cost, normalised)
+        # Reward (negative cost, normalised by arrival notional)
         denom = self.target_qty * self.arrival_mid
         reward = - (step_cost / denom) if denom > 0 else 0.0
 
@@ -180,12 +180,10 @@ class ExecEnv(gym.Env):
         self.t += 1
         done = False
 
-        # Terminal: force liquidation at last step
+        # Terminal: force liquidation
         if self.t >= self.horizon_steps or self.remaining_qty <= 1e-12:
             done = True
-            # If leftover, force liquidate using current row book
             if self.remaining_qty > 1e-12:
-                # use last available row
                 last_row = self._get_row(self.start_idx + self.horizon_steps - 1)
                 last_mid = float(last_row["mid"])
                 if self.side == "buy":
@@ -208,7 +206,7 @@ class ExecEnv(gym.Env):
                         term_cost = filled2 * (last_mid - price2) + fee2
 
                     self.is_cash_total += term_cost
-                    reward += - (term_cost / denom)
+                    reward += - (term_cost / denom) if denom > 0 else 0.0
 
         exec_vwap = (self.notional_total / self.filled_total) if self.filled_total > 0 else np.nan
 
@@ -220,20 +218,5 @@ class ExecEnv(gym.Env):
             "remaining_qty": self.remaining_qty,
         }
 
-        obs = self._obs() if not done else self._obs()  # safe; final obs ok
+        obs = self._obs()
         return obs, float(reward), done, False, info
-
-if __name__ == "__main__":
-    env = ExecEnv("/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet")
-    obs, _ = env.reset()
-
-    done = False
-    total = 0
-    while not done:
-        action = env.action_space.sample()
-        obs, r, done, _, info = env.step(action)
-        total += r
-
-    print("Return:", total)
-    print("Info:", info)
-

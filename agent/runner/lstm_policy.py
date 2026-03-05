@@ -75,14 +75,14 @@ class LSTMPolicy:
 
         obs_tf = tf.convert_to_tensor(obs, dtype=tf.float32)
         a, raw_u, logp, v, next_state = act_step(self.model, obs_tf, self.state, deterministic)
-        self.state = next_state
+        self.state = next_state #internally updates the state, so when we call act_step again, we pass this data in for self.state
 
         return PolicyStep(
             action=np.array([float(a)], dtype=np.float32),
             raw_u=float(raw_u),
             logp=float(logp),
             value=float(v),
-            state_h=h_np.astype(np.float32),
-            state_c=c_np.astype(np.float32),
+            state_h=h_np.astype(np.float32), #state before action decision
+            state_c=c_np.astype(np.float32), #state before action decision
         )
 
