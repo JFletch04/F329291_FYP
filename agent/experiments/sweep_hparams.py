@@ -17,31 +17,26 @@ class RunResult:
 
 
 # -----------------------------
-# USER: set DOGE data + env knobs here
+# DOGE: data + env knobs
 # -----------------------------
-BTC_DATA_ROOT = "/Users/jackfletcher/Desktop/FYP_Data/replay_5s_BTC"
+DOGE_SYMBOL = "DOGE"
+DOGE_DATA_ROOT = "/Users/jackfletcher/Desktop/FYP_Data/replay_5s_DOGE"
 
-BTC_ENV_KWARGS = dict(
+DOGE_ENV_KWARGS = dict(
     horizon_steps=4320,
     side="buy",
-    target_qty=50.0,
-    max_child_qty=0.25,
-    pov_cap=0.05,
+    target_qty=3000000.0,
+    max_child_qty=3500.0,
+    pov_cap=0.10,
     taker_fee_rate=0.0,
 )
 
-BTC_SYMBOL = "BTC"
-
 
 def read_best_val_is_bps(csv_path: str) -> float:
-    """
-    Reads a train CSV log and returns min(best_val_is_bps) across all rows.
-    Uses stdlib csv module to avoid pandas dependency issues.
-    """
     best = float("inf")
     with open(csv_path, "r", newline="") as f:
         reader = csv.DictReader(f)
-        if "best_val_is_bps" not in reader.fieldnames:
+        if not reader.fieldnames or "best_val_is_bps" not in reader.fieldnames:
             raise ValueError(f"CSV {csv_path} missing best_val_is_bps column. Found: {reader.fieldnames}")
         for row in reader:
             try:
@@ -55,13 +50,53 @@ def read_best_val_is_bps(csv_path: str) -> float:
     return best
 
 
+def get_run_paths(run_name: str):
+    csv_path = os.path.join("logs", DOGE_SYMBOL, f"{run_name}.csv")
+    ckpt_dir = os.path.join("checkpoints", DOGE_SYMBOL, run_name)
+    best_ckpt_path = os.path.join(ckpt_dir, "best.weights.h5")
+    return csv_path, ckpt_dir, best_ckpt_path
+
+
+def is_run_complete(config: Dict) -> bool:
+    """
+    Treat a run as complete if its CSV exists and contains at least one parseable
+    best_val_is_bps. Optionally require best checkpoint too.
+    """
+    run_name = config["run_name"]
+    csv_path, _, best_ckpt_path = get_run_paths(run_name)
+
+    if not os.path.exists(csv_path):
+        return False
+
+    try:
+        _ = read_best_val_is_bps(csv_path)
+    except Exception:
+        return False
+
+    # If you want to require checkpoint existence too, uncomment:
+    # if not os.path.exists(best_ckpt_path):
+    #     return False
+
+    return True
+
+
+def load_existing_result(config: Dict) -> RunResult:
+    run_name = config["run_name"]
+    csv_path, _, best_ckpt_path = get_run_paths(run_name)
+    best_val = read_best_val_is_bps(csv_path)
+    return RunResult(
+        run_name=run_name,
+        config=config,
+        best_val_is_bps=best_val,
+        best_ckpt_path=best_ckpt_path,
+        csv_path=csv_path,
+    )
+
+
 def run_training(config: Dict) -> RunResult:
     run_name = config["run_name"]
 
-    # IMPORTANT: per-symbol folders (matches updated train_ppo_lstm.py)
-    csv_path = os.path.join("logs", BTC_SYMBOL, f"{run_name}.csv")
-    ckpt_dir = os.path.join("checkpoints", BTC_SYMBOL, run_name)
-    best_ckpt_path = os.path.join(ckpt_dir, "best.weights.h5")
+    csv_path, _, best_ckpt_path = get_run_paths(run_name)
 
     cmd = [
         "python",
@@ -69,8 +104,8 @@ def run_training(config: Dict) -> RunResult:
         "agent.experiments.train_ppo_lstm",
 
         # DATA / IDENTITY
-        "--symbol", BTC_SYMBOL,
-        "--data_root", BTC_DATA_ROOT,
+        "--symbol", DOGE_SYMBOL,
+        "--data_root", DOGE_DATA_ROOT,
         "--run_name", run_name,
 
         # PPO HYPERPARAMS
@@ -91,7 +126,7 @@ def run_training(config: Dict) -> RunResult:
         "--seed", str(config["seed"]),
         "--val_seed", str(config["val_seed"]),
 
-        # ENV KNOBS (DOGE)
+        # ENV KNOBS
         "--horizon_steps", str(config["horizon_steps"]),
         "--side", str(config["side"]),
         "--target_qty", str(config["target_qty"]),
@@ -100,9 +135,8 @@ def run_training(config: Dict) -> RunResult:
         "--taker_fee_rate", str(config["taker_fee_rate"]),
     ]
 
-    # Ensure base folders exist (train_ppo_lstm will also create them)
-    os.makedirs(os.path.join("logs", BTC_SYMBOL), exist_ok=True)
-    os.makedirs(os.path.join("checkpoints", BTC_SYMBOL), exist_ok=True)
+    os.makedirs(os.path.join("logs", DOGE_SYMBOL), exist_ok=True)
+    os.makedirs(os.path.join("checkpoints", DOGE_SYMBOL), exist_ok=True)
 
     print(f"\n=== Running: {run_name} ===")
     subprocess.run(cmd, check=True)
@@ -123,71 +157,57 @@ def run_training(config: Dict) -> RunResult:
 
 def make_configs() -> List[Dict]:
     """
-    Stage 2: sweep ONLY gamma/lambda over the top-3 base configs from Stage 1.
-    Keeps lr/clip/ent/epochs fixed to those top configs.
+    Stage 2: gamma/lambda sweep over top-3 Stage 1 base configs.
+    Total runs = 3 bases * 3 gammas * 2 lams * 3 seeds = 54
     """
 
-    # ---- Top 3 base configs (from Stage 1) ----
     base_configs = [
-        # #1
-        dict(lr=0.001, clip_eps=0.2, ent_coef=0.01,  ppo_epochs=8, batch_size_chunks=16, chunk_len=32),
-        # #2
-        dict(lr=0.001, clip_eps=0.1, ent_coef=0.01,  ppo_epochs=8, batch_size_chunks=16, chunk_len=32),
-        # #3
-        dict(lr=0.001, clip_eps=0.2, ent_coef=0.005, ppo_epochs=8, batch_size_chunks=16, chunk_len=32),
+        dict(lr=3e-4, clip_eps=0.2, ent_coef=0.01,  ppo_epochs=4, batch_size_chunks=16, chunk_len=32),
+        dict(lr=3e-4, clip_eps=0.2, ent_coef=0.005, ppo_epochs=4, batch_size_chunks=16, chunk_len=32),
+        dict(lr=3e-4, clip_eps=0.2, ent_coef=0.01,  ppo_epochs=8, batch_size_chunks=16, chunk_len=32),
     ]
 
-    # ---- Stage 2 sweep grid ----
     gammas = [0.99, 0.995, 0.999]
     lams   = [0.90, 0.95]
-
     seeds = [1, 2, 3]
     val_seed = 999
 
     rollout_episodes = 16
     patience = 20
 
-    # ---- Env knobs (unchanged) ----
-    horizon_steps = BTC_ENV_KWARGS["horizon_steps"]
-    side = BTC_ENV_KWARGS["side"]
-    target_qty = BTC_ENV_KWARGS["target_qty"]
-    max_child_qty = BTC_ENV_KWARGS["max_child_qty"]
-    pov_cap = BTC_ENV_KWARGS["pov_cap"]
-    taker_fee_rate = BTC_ENV_KWARGS["taker_fee_rate"]
+    horizon_steps = DOGE_ENV_KWARGS["horizon_steps"]
+    side = DOGE_ENV_KWARGS["side"]
+    target_qty = DOGE_ENV_KWARGS["target_qty"]
+    max_child_qty = DOGE_ENV_KWARGS["max_child_qty"]
+    pov_cap = DOGE_ENV_KWARGS["pov_cap"]
+    taker_fee_rate = DOGE_ENV_KWARGS["taker_fee_rate"]
 
     configs = []
 
     for base_i, base in enumerate(base_configs, start=1):
         for gamma, lam, seed in itertools.product(gammas, lams, seeds):
             run_name = (
-                f"{BTC_SYMBOL}_S2B{base_i}_"
+                f"{DOGE_SYMBOL}_S2B{base_i}_"
                 f"lr{base['lr']:g}_clip{base['clip_eps']:g}_ent{base['ent_coef']:g}_ep{base['ppo_epochs']}"
                 f"_bs{base['batch_size_chunks']}_cl{base['chunk_len']}"
                 f"_gamma{gamma:g}_lam{lam:g}_seed{seed}"
+                f"_H{horizon_steps}_Q{target_qty:g}_pov{pov_cap:g}_fee{taker_fee_rate:g}"
             )
 
             configs.append({
                 "run_name": run_name,
-
-                # PPO knobs (fixed from base config)
                 "lr": base["lr"],
                 "clip_eps": base["clip_eps"],
                 "ent_coef": base["ent_coef"],
                 "ppo_epochs": base["ppo_epochs"],
                 "batch_size_chunks": base["batch_size_chunks"],
                 "chunk_len": base["chunk_len"],
-
-                # Stage 2 sweep knobs
                 "gamma": gamma,
                 "lam": lam,
-
-                # Seeds/budget
                 "seed": seed,
                 "val_seed": val_seed,
                 "rollout_episodes": rollout_episodes,
                 "patience": patience,
-
-                # Env knobs
                 "horizon_steps": horizon_steps,
                 "side": side,
                 "target_qty": target_qty,
@@ -200,15 +220,10 @@ def make_configs() -> List[Dict]:
 
 
 def write_summary_csv(path: str, results: List[RunResult]) -> None:
-    """
-    Write a flat summary csv with stdlib csv module.
-    """
     if not results:
         return
 
-    # union keys
     fieldnames = ["run_name", "best_val_is_bps", "ckpt", "csv"]
-    # include config keys
     cfg_keys = sorted({k for r in results for k in r.config.keys() if k != "run_name"})
     fieldnames.extend(cfg_keys)
 
@@ -232,16 +247,29 @@ def main():
     print(f"Total configs: {len(configs)}")
 
     results: List[RunResult] = []
+    summary_path = os.path.join("logs", DOGE_SYMBOL, "hparam_sweep_stage2_gamma_lambda.csv")
 
-    for cfg in configs:
+    for i, cfg in enumerate(configs, start=1):
+        run_name = cfg["run_name"]
+        print(f"\n[{i}/{len(configs)}] {run_name}")
+
         try:
-            res = run_training(cfg)
-            results.append(res)
-            print(f"✅ {res.run_name}: best_val_is_bps={res.best_val_is_bps:.6f}")
+            if is_run_complete(cfg):
+                res = load_existing_result(cfg)
+                results.append(res)
+                print(f"⏭️  Skipping completed run: {res.run_name} (best_val_is_bps={res.best_val_is_bps:.6f})")
+            else:
+                res = run_training(cfg)
+                results.append(res)
+                print(f"✅ {res.run_name}: best_val_is_bps={res.best_val_is_bps:.6f}")
+
+            # Save progress after every successful/loaded run
+            write_summary_csv(summary_path, results)
+
         except subprocess.CalledProcessError as e:
-            print(f"❌ Run failed: {cfg['run_name']} ({e})")
+            print(f"❌ Run failed: {run_name} ({e})")
         except Exception as e:
-            print(f"❌ Error in run {cfg['run_name']}: {e}")
+            print(f"❌ Error in run {run_name}: {e}")
 
     if not results:
         raise RuntimeError("No successful runs completed.")
@@ -257,8 +285,6 @@ def main():
         print(f"  log:  {r.csv_path}")
         print(f"  config: {json.dumps({k: v for k, v in r.config.items() if k != 'run_name'}, indent=2)}")
 
-    # Save full summary in logs/DOGE/
-    summary_path = os.path.join("logs", BTC_SYMBOL, "hparam_sweep2_summary.csv")
     write_summary_csv(summary_path, results)
     print(f"\nSaved sweep summary to: {summary_path}")
 

@@ -99,10 +99,12 @@ def act_step(model: RecurrentActorCritic, obs_t, state, deterministic: bool):
     mu = mu[:, :, :]   # [1,1,1] does nothing
     v = tf.squeeze(v, axis=[0, 1, 2])  # scalar, converts [B, T, 1], to [1]
 
-    if deterministic:
+    if deterministic: #Dont random sample, just use the mean of the gaussian 
+        #Used in evaluation, Testing, Backtesting as mu_head has been trained to give the best action
         raw_u = mu
-        a = tf.sigmoid(raw_u)
+        a = tf.sigmoid(raw_u) #action = sigmoid of the mean
     else:
+        #Used for training, Rollouts, Experience collection
         a, raw_u = sample_action(mu, log_std)
 
     logp = log_prob_squashed_gaussian(raw_u, mu, log_std)  # [1,1]

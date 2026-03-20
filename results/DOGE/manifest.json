@@ -1,0 +1,61 @@
+{
+  "asset": "DOGE",
+  "data_root": "/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE",
+  "output_root": "results/DOGE",
+  "n_test_days": 24,
+  "n_episodes_per_scenario": 100,
+  "eval_seed": 123,
+  "scenarios": [
+    {
+      "name": "doge_q500000",
+      "target_qty": 500000.0,
+      "horizon_steps": 4320,
+      "max_child_qty": 3500.0,
+      "pov_cap": 0.1,
+      "side": "buy",
+      "taker_fee_rate": 0.0
+    },
+    {
+      "name": "doge_q1e+06",
+      "target_qty": 1000000.0,
+      "horizon_steps": 4320,
+      "max_child_qty": 3500.0,
+      "pov_cap": 0.1,
+      "side": "buy",
+      "taker_fee_rate": 0.0
+    },
+    {
+      "name": "doge_q3e+06",
+      "target_qty": 3000000.0,
+      "horizon_steps": 4320,
+      "max_child_qty": 3500.0,
+      "pov_cap": 0.1,
+      "side": "buy",
+      "taker_fee_rate": 0.0
+    },
+    {
+      "name": "doge_q6e+06",
+      "target_qty": 6000000.0,
+      "horizon_steps": 4320,
+      "max_child_qty": 3500.0,
+      "pov_cap": 0.1,
+      "side": "buy",
+      "taker_fee_rate": 0.0
+    },
+    {
+      "name": "doge_q1p2e+07",
+      "target_qty": 12000000.0,
+      "horizon_steps": 4320,
+      "max_child_qty": 3500.0,
+      "pov_cap": 0.1,
+      "side": "buy",
+      "taker_fee_rate": 0.0
+    }
+  ],
+  "policies": [
+    "TWAP",
+    "DOGE_PPO_1",
+    "DOGE_PPO_2",
+    "DOGE_PPO_3"
+  ]
+}
