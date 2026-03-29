@@ -7,6 +7,7 @@ from agent.runner.lstm_policy import LSTMPolicy
 from agent.runner.collector import EpisodeStats
 
 
+# Aggregate the evaluation metrics
 @dataclass
 class EvalMetrics:
     n_episodes: int
@@ -17,8 +18,9 @@ class EvalMetrics:
     mean_cost_cash_vs_mid: float
 
 
+# Convert the episode stats into IS (bps)
 def _is_bps_from_stats(s: EpisodeStats) -> float:
-    # IS (cash vs mid) already includes spread/slip, so express in bps of arrival notional
+    # Express the execution cost in bps of arrival notional
     denom = s.filled_total * s.arrival_mid
     if denom <= 0 or math.isnan(denom):
         return float("nan")
@@ -26,9 +28,8 @@ def _is_bps_from_stats(s: EpisodeStats) -> float:
 
 
 def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic: bool = True) -> EvalMetrics:
-    """
-    Runs full episodes (no learning) and returns execution metrics.
-    """
+    # Run the evaluation episodes with no learning to initialise
+
     returns: List[float] = []
     steps: List[int] = []
     is_bps: List[float] = []
@@ -37,12 +38,14 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
 
     for _ in range(n_episodes):
         obs, _ = env.reset()
-        policy.reset()
+        policy.reset()  # reset the hidden state each episode to keep stable
         done = False
         ep_ret = 0.0
         info_last: Dict[str, Any] = {}
 
         t = 0
+
+        # Running of an episode
         while not done:
             ps = policy.step(obs, deterministic=deterministic)
             obs, r, terminated, truncated, info = env.step(ps.action)
@@ -52,6 +55,7 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
             if info:
                 info_last = info
 
+        # Build the episode stats
         s = EpisodeStats(
             episode_return=ep_ret,
             steps=t,
@@ -66,13 +70,16 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
         steps.append(s.steps)
         costs.append(s.cost_cash_vs_mid)
 
+        # Compute IS (bps)
         isbps = _is_bps_from_stats(s)
         if not math.isnan(isbps):
             is_bps.append(isbps)
 
+        # Completion ratio
         if s.filled_total > 0 and not math.isnan(s.filled_total):
             completion.append(s.filled_total / env.target_qty)
 
+    # Aggregate the metrics
     return EvalMetrics(
         n_episodes=n_episodes,
         mean_return=float(np.mean(returns)) if returns else float("nan"),
