@@ -41,8 +41,37 @@ def utc_day_start_ms(ts_ms: int) -> int:
 
 def cumulative(weights: List[float]) -> List[float]:
     cum = np.cumsum(weights).astype(float)
-    cum[-1] = 1.0
+    if len(cum) > 0:
+        cum[-1] = 1.0
     return cum.tolist()
+
+
+def renormalize(weights: List[float]) -> List[float]:
+    arr = np.asarray(weights, dtype=float)
+    total = float(arr.sum())
+    if total <= 0:
+        if len(arr) == 0:
+            return []
+        return (np.ones(len(arr), dtype=float) / len(arr)).tolist()
+    return (arr / total).tolist()
+
+
+def infer_arrival_trade_price_at_ts(trades: pd.DataFrame, ts_ms: int) -> float:
+    """
+    Market trade price proxy at or immediately around ts_ms.
+    """
+    if len(trades) == 0:
+        return 0.0
+
+    before_or_at = trades.loc[trades["timestamp"] <= ts_ms]
+    if len(before_or_at) > 0:
+        return float(before_or_at["price"].iloc[-1])
+
+    after = trades.loc[trades["timestamp"] > ts_ms]
+    if len(after) > 0:
+        return float(after["price"].iloc[0])
+
+    return float(trades["price"].iloc[0])
 
 
 # ----------------------------
@@ -54,7 +83,7 @@ def load_trades_day(trade_csv: Path) -> pd.DataFrame:
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"{trade_csv} missing required columns: {missing}")
-    return df
+    return df.sort_values("timestamp").reset_index(drop=True)
 
 
 def market_vwap(df_trades: pd.DataFrame) -> float:
@@ -84,14 +113,12 @@ def market_volume_by_bucket(
 def walk_book_buy(asks: Dict[float, float], qty: float) -> Tuple[float, float]:
     """
     Consume ask depth from best ask upwards.
-    Returns (avg_price, filled_qty). Does NOT mutate input dict (works on a copy).
+    Returns (avg_price, filled_qty). Does NOT mutate input dict.
     """
     if qty <= 0:
         return 0.0, 0.0
 
-    # copy so we don't change the live replay book
     local = dict(asks)
-
     remaining = qty
     cost = 0.0
     filled = 0.0
@@ -113,13 +140,12 @@ def walk_book_buy(asks: Dict[float, float], qty: float) -> Tuple[float, float]:
 def walk_book_sell(bids: Dict[float, float], qty: float) -> Tuple[float, float]:
     """
     Consume bid depth from best bid downwards.
-    Returns (avg_price, filled_qty). Does NOT mutate input dict (works on a copy).
+    Returns (avg_price, filled_qty). Does NOT mutate input dict.
     """
     if qty <= 0:
         return 0.0, 0.0
 
     local = dict(bids)
-
     remaining = qty
     proceeds = 0.0
     filled = 0.0
@@ -141,25 +167,29 @@ def walk_book_sell(bids: Dict[float, float], qty: float) -> Tuple[float, float]:
 # ----------------------------
 # Core VWAP execution simulation
 # ----------------------------
-def simulate_vwap_execution_day(
+def simulate_vwap_execution_window(
     trade_csv: Path,
     book_jsonl: Path,
     avg_curve_weights: List[float],
     Q: float,
-    side: str,  # "buy" or "sell"
-    participation_rate: Optional[float] = None,  # e.g. 0.1 for 10% cap; None = no cap
-    intra_bucket_slices: int = 1,                # execute within each 5-min bucket in N slices
+    side: str,                        # "buy" or "sell"
+    start_ts_ms: Optional[int] = None,
+    horizon_ms: Optional[int] = None,
+    participation_rate: Optional[float] = None,
+    intra_bucket_slices: int = 1,
+    force_terminal_completion: bool = True,
 ) -> dict:
     """
-    VWAP baseline:
-    - Uses avg_curve_weights (len=288) to set target schedule
-    - Optionally caps execution per bucket by participation_rate * market_volume_in_bucket
-    - Prices fills using L2 book depth at execution timestamps (walk the book)
-    - Returns metrics + fills
+    Episode/window-based VWAP baseline.
 
-    IMPORTANT:
-    - Fill simulation uses a copy of the book at that time (doesn't alter future book replay).
-      This is a standard baseline assumption.
+    Key differences from the old version:
+    - Executes only over a chosen window, not necessarily the full day
+    - Uses arrival price at window start
+    - Can force terminal completion at the horizon
+
+    avg_curve_weights:
+    - daily 288-bucket profile
+    - sliced to the active window and renormalized
     """
 
     side = side.lower().strip()
@@ -175,39 +205,51 @@ def simulate_vwap_execution_day(
     if intra_bucket_slices < 1:
         raise ValueError("intra_bucket_slices must be >= 1")
 
-    # Load trades day
     trades = load_trades_day(trade_csv)
+    if len(trades) == 0:
+        raise ValueError(f"No trades found in {trade_csv}")
+
     first_ts = int(trades["timestamp"].iloc[0])
+    last_ts = int(trades["timestamp"].iloc[-1])
     day_start = utc_day_start_ms(first_ts)
+    day_end = day_start + DAY_MS
 
-    # Market benchmarks / participation caps
+    if start_ts_ms is None:
+        start_ts_ms = first_ts
+    start_ts_ms = int(max(first_ts, start_ts_ms))
+
+    if horizon_ms is None:
+        end_ts_ms = min(day_end, last_ts)
+    else:
+        end_ts_ms = min(day_end, start_ts_ms + int(horizon_ms), last_ts)
+
+    if end_ts_ms <= start_ts_ms:
+        raise ValueError("Execution window is empty")
+
+    arrival_price = infer_arrival_trade_price_at_ts(trades, start_ts_ms)
+
+    # Day-level market data
     mkt_vwap = market_vwap(trades)
-    mkt_vols = market_volume_by_bucket(trades, day_start)
+    mkt_vols_day = market_volume_by_bucket(trades, day_start)
 
-    # Build cumulative schedule from the average curve
-    cum_w = cumulative(avg_curve_weights)  # length 288, ends at 1.0
+    # Window bucket range
+    start_bucket = int((start_ts_ms - day_start) // BUCKET_MS)
+    end_bucket = int((max(start_ts_ms, end_ts_ms - 1) - day_start) // BUCKET_MS)
+    start_bucket = max(0, min(BUCKETS_PER_DAY - 1, start_bucket))
+    end_bucket = max(0, min(BUCKETS_PER_DAY - 1, end_bucket))
 
-    # Prepare execution times
-    # We'll execute at slice boundaries inside each bucket, e.g. for intra_bucket_slices=5:
-    # bucket start + 1/5, 2/5, ... bucket end
-    def slice_timestamps_for_bucket(b: int) -> List[int]:
-        bucket_start = day_start + b * BUCKET_MS
-        return [
-            bucket_start + (i + 1) * (BUCKET_MS // intra_bucket_slices)
-            for i in range(intra_bucket_slices)
-        ]
+    window_bucket_ids = list(range(start_bucket, end_bucket + 1))
+    window_curve = [avg_curve_weights[b] for b in window_bucket_ids]
+    window_curve = renormalize(window_curve)
+    window_cum = cumulative(window_curve)
 
-    # Stream orderbook and keep latest book <= current execution timestamp
+    # Stream orderbook
     ob_iter = replay_orderbook(book_jsonl)
     current_ts: Optional[int] = None
     current_book: Optional[OrderBook] = None
 
     def advance_book_to(target_ts: int) -> None:
-        """
-        Advances the replay stream so that current_book is the latest book with ts <= target_ts.
-        """
         nonlocal current_ts, current_book
-
         while True:
             try:
                 ts, book = next(ob_iter)
@@ -219,66 +261,75 @@ def simulate_vwap_execution_day(
                 current_book = book
                 continue
             else:
-                # We've gone past target_ts; keep the last one we had (<= target_ts)
                 break
+
+    def exec_slice(ts_exec: int, qty: float, bucket: int, slice_idx: int) -> Tuple[float, float]:
+        nonlocal current_book, current_ts
+        if qty <= 0:
+            return 0.0, 0.0
+
+        advance_book_to(ts_exec)
+        if current_book is None or current_book.best_bid() is None or current_book.best_ask() is None:
+            return 0.0, 0.0
+
+        if side == "buy":
+            avg_px, got = walk_book_buy(current_book.asks, qty)
+        else:
+            avg_px, got = walk_book_sell(current_book.bids, qty)
+        return avg_px, got
 
     fills: List[Fill] = []
     filled_qty = 0.0
     exec_notional = 0.0
 
-    # Execute bucket by bucket
-    for b in range(BUCKETS_PER_DAY):
-        # Target cumulative quantity by end of this bucket
-        target_cum = Q * cum_w[b]
+    # Execute within the selected window buckets
+    for local_idx, b in enumerate(window_bucket_ids):
+        target_cum = Q * window_cum[local_idx]
         deficit = target_cum - filled_qty
         if deficit <= 0:
             continue
 
-        # Participation cap for this bucket
         if participation_rate is not None:
-            cap = participation_rate * float(mkt_vols[b])
-            # If cap is very small/zero (quiet bucket), you may do nothing in this bucket.
+            cap = participation_rate * float(mkt_vols_day[b])
             bucket_qty_allowed = max(0.0, cap)
         else:
-            bucket_qty_allowed = deficit  # no cap
+            bucket_qty_allowed = deficit
 
         bucket_qty_to_execute = min(deficit, bucket_qty_allowed)
         if bucket_qty_to_execute <= 0:
             continue
 
-        # Split within-bucket
-        slice_times = slice_timestamps_for_bucket(b)
+        bucket_start = day_start + b * BUCKET_MS
+        bucket_end = bucket_start + BUCKET_MS
+
+        active_start = max(bucket_start, start_ts_ms)
+        active_end = min(bucket_end, end_ts_ms)
+        if active_end <= active_start:
+            continue
+
+        step = max((active_end - active_start) // intra_bucket_slices, 1)
+        slice_times = [
+            min(active_start + (i + 1) * step, active_end)
+            for i in range(intra_bucket_slices)
+        ]
+
         slice_qty = bucket_qty_to_execute / intra_bucket_slices
 
         for s_idx, ts_exec in enumerate(slice_times):
             if filled_qty >= Q:
                 break
 
-            # If last slice and rounding left something, take remainder to hit planned bucket qty
             if s_idx == intra_bucket_slices - 1:
-                # remaining planned for this bucket
                 already_done_in_bucket = slice_qty * (intra_bucket_slices - 1)
                 slice_qty_eff = bucket_qty_to_execute - already_done_in_bucket
             else:
                 slice_qty_eff = slice_qty
 
-            # Also don't exceed total Q
             slice_qty_eff = min(slice_qty_eff, Q - filled_qty)
             if slice_qty_eff <= 0:
                 continue
 
-            # Advance order book to this exec time
-            advance_book_to(ts_exec)
-            if current_book is None or (current_book.best_bid() is None) or (current_book.best_ask() is None):
-                # no usable book yet; skip
-                continue
-
-            # Price + fill from L2
-            if side == "buy":
-                avg_px, got = walk_book_buy(current_book.asks, slice_qty_eff)
-            else:
-                avg_px, got = walk_book_sell(current_book.bids, slice_qty_eff)
-
+            avg_px, got = exec_slice(ts_exec, slice_qty_eff, b, s_idx)
             if got > 0:
                 fills.append(Fill(ts=ts_exec, qty=got, avg_price=avg_px, bucket=b, slice_idx=s_idx))
                 filled_qty += got
@@ -287,31 +338,88 @@ def simulate_vwap_execution_day(
         if filled_qty >= Q:
             break
 
+    # Terminal liquidation to match horizon-based RL evaluation more closely
+    terminal_liq_qty = max(0.0, Q - filled_qty)
+    terminal_liq_avg_px = 0.0
+    if force_terminal_completion and terminal_liq_qty > 0:
+        avg_px, got = exec_slice(end_ts_ms, terminal_liq_qty, end_bucket, intra_bucket_slices)
+        if got > 0:
+            fills.append(
+                Fill(
+                    ts=end_ts_ms,
+                    qty=got,
+                    avg_price=avg_px,
+                    bucket=end_bucket,
+                    slice_idx=intra_bucket_slices,
+                )
+            )
+            filled_qty += got
+            exec_notional += got * avg_px
+            terminal_liq_avg_px = avg_px
+
     exec_avg_price = (exec_notional / filled_qty) if filled_qty > 0 else 0.0
 
-    # Slippage vs market VWAP
-    # For buys: paying above VWAP is bad -> positive slippage is bad
-    # For sells: receiving below VWAP is bad -> positive slippage is bad (we flip)
     if side == "buy":
         slippage_vs_vwap = exec_avg_price - mkt_vwap
+        implementation_shortfall = exec_avg_price - arrival_price
     else:
         slippage_vs_vwap = mkt_vwap - exec_avg_price
+        implementation_shortfall = arrival_price - exec_avg_price
 
-    completion_rate = filled_qty / Q
+    completion_rate = filled_qty / Q if Q > 0 else 0.0
 
     return {
         "day_start": day_start,
+        "start_ts_ms": start_ts_ms,
+        "end_ts_ms": end_ts_ms,
+        "window_horizon_ms": end_ts_ms - start_ts_ms,
         "side": side,
         "Q": Q,
         "filled_qty": filled_qty,
         "completion_rate": completion_rate,
         "exec_avg_price": exec_avg_price,
         "market_vwap": mkt_vwap,
+        "arrival_price": arrival_price,
+        "implementation_shortfall": implementation_shortfall,
         "slippage_vs_vwap": slippage_vs_vwap,
         "participation_rate": participation_rate,
         "intra_bucket_slices": intra_bucket_slices,
+        "start_bucket": start_bucket,
+        "end_bucket": end_bucket,
+        "force_terminal_completion": force_terminal_completion,
+        "terminal_liq_qty": terminal_liq_qty,
+        "terminal_liq_avg_px": terminal_liq_avg_px,
         "fills": fills,
     }
+
+
+# ----------------------------
+# Backward-compatible wrapper
+# ----------------------------
+def simulate_vwap_execution_day(
+    trade_csv: Path,
+    book_jsonl: Path,
+    avg_curve_weights: List[float],
+    Q: float,
+    side: str,
+    participation_rate: Optional[float] = None,
+    intra_bucket_slices: int = 1,
+) -> dict:
+    """
+    Original full-day API retained for compatibility.
+    """
+    return simulate_vwap_execution_window(
+        trade_csv=trade_csv,
+        book_jsonl=book_jsonl,
+        avg_curve_weights=avg_curve_weights,
+        Q=Q,
+        side=side,
+        start_ts_ms=None,
+        horizon_ms=None,
+        participation_rate=participation_rate,
+        intra_bucket_slices=intra_bucket_slices,
+        force_terminal_completion=True,
+    )
 
 
 # ----------------------------
@@ -324,34 +432,3 @@ def save_fills_to_csv(fills: List[Fill], out_path: Path) -> None:
         writer.writeheader()
         for fill in fills:
             writer.writerow(asdict(fill))
-
-
-# ----------------------------
-# Example CLI-ish usage
-# ----------------------------
-if __name__ == "__main__":
-    # Example: adapt these paths
-    trade_csv = Path("/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_trades/January/2025-01-15.csv")
-    book_jsonl = Path("/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_lob/January/2025-01-15.jsonl")
-
-    # You should load your avg_curve_weights from your curve module output.
-    # For quick testing, here's a flat curve (NOT recommended for real use):
-    avg_curve_weights = (np.ones(BUCKETS_PER_DAY) / BUCKETS_PER_DAY).tolist()
-
-    result = simulate_vwap_execution_day(
-        trade_csv=trade_csv,
-        book_jsonl=book_jsonl,
-        avg_curve_weights=avg_curve_weights,
-        Q=10.0,
-        side="buy",
-        participation_rate=0.10,   # 10% of market volume per 5-min bucket
-        intra_bucket_slices=5,     # execute 5 times within each 5-min bucket
-    )
-
-    print("Filled:", result["filled_qty"], "Completion:", result["completion_rate"])
-    print("Exec Avg:", result["exec_avg_price"])
-    print("Mkt VWAP:", result["market_vwap"])
-    print("Slippage vs VWAP:", result["slippage_vs_vwap"])
-
-    save_fills_to_csv(result["fills"], Path("fills.csv"))
-    print("Saved fills.csv")

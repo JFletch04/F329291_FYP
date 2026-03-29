@@ -1,0 +1,11 @@
+asset,scenario_name,day_path,day_name,start_idx,target_qty,horizon_steps
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-17_steps_5s.parquet,2026-01-17_steps_5s.parquet,4382,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-17_steps_5s.parquet,2026-01-17_steps_5s.parquet,745,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-13_steps_5s.parquet,2026-01-13_steps_5s.parquet,1052,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-23_steps_5s.parquet,2026-01-23_steps_5s.parquet,1350,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-18_steps_5s.parquet,2026-01-18_steps_5s.parquet,1398,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-20_steps_5s.parquet,2026-01-20_steps_5s.parquet,12107,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-11_steps_5s.parquet,2026-01-11_steps_5s.parquet,7696,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-17_steps_5s.parquet,2026-01-17_steps_5s.parquet,2505,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-31_steps_5s.parquet,2026-01-31_steps_5s.parquet,4432,500000.0,4320
+DOGE,doge_q500000,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_DOGE/January/2026-01-15_steps_5s.parquet,2026-01-15_steps_5s.parquet,172,500000.0,4320

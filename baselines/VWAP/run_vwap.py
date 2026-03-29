@@ -6,37 +6,57 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
-from execution import simulate_vwap_execution_day, BUCKET_MS, BUCKETS_PER_DAY
+from execution import (
+    simulate_vwap_execution_window,
+    BUCKET_MS,
+    BUCKETS_PER_DAY,
+)
 from metrics import compute_execution_metrics
 
 
 # ============================================================
-# USER CONFIG (change these)
+# USER CONFIG
 # ============================================================
 
-SYMBOL = "BTCUSDT"   # <-- switch between "BTCUSDT" and "DOGEUSDT"
-
-MONTH = "December"   # folder name you used, e.g. "December"
+SYMBOL = "BTCUSDT"   # "BTCUSDT" or "DOGEUSDT"
+MONTH = "January"
 
 BASE_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data")
 
 TRADES_DIR = BASE_DIR / f"{SYMBOL}_trades" / MONTH
-LOB_DIR    = BASE_DIR / f"{SYMBOL}_LOB" / MONTH
+LOB_DIR = BASE_DIR / f"{SYMBOL}_LOB" / MONTH
 
-# Train/Test split (uses matched trade+LOB days)
 TRAIN_DAYS = 25
 TEST_DAYS = 6
 
-SIDE = "sell"  # "buy" or "sell"
+# Match DRL side more closely
+SIDE = "buy"
 
-# Parent order size (recommended: define as USDT notional)
-NOTIONAL_USDT = 10_000_000 # e.g. 1_000_000 means ~$1m notional per day
+# Use quantity consistent with your scenario when possible.
+# For BTC, if you want PPO-comparable evaluation, consider setting QTY directly to 50.0
+# rather than converting from notional.
+USE_FIXED_QTY = True
+FIXED_QTY = 10000.0
 
-# Execution knobs
-PARTICIPATION_RATE = 0.10     # 0.05 = 5%, 0.10 = 10%, 1.0 = 100% (very aggressive)
-INTRA_BUCKET_SLICES = 5       # how many child orders inside each 5-min bucket
+NOTIONAL_USDT = 10_000_000
 
-OUT_RESULTS_CSV = Path(f"vwap_results_{SYMBOL}_{MONTH}.csv")
+PARTICIPATION_RATE = 0.05
+INTRA_BUCKET_SLICES = 5
+
+# DRL horizon: 4320 steps * 5 seconds = 6 hours
+GRID_MS = 5_000
+HORIZON_STEPS = 4320
+HORIZON_MS = HORIZON_STEPS * GRID_MS
+
+# Window start:
+# "day_start" = start at first trade of the day
+# "hour_utc"  = start at a fixed UTC hour
+WINDOW_START_MODE = "day_start"
+START_HOUR_UTC = 0
+
+FORCE_TERMINAL_COMPLETION = True
+
+OUT_RESULTS_CSV = Path(f"vwap_test_results_{SYMBOL}_{MONTH}.csv")
 SAVE_FILLS = False
 FILLS_DIR = Path("fills")
 
@@ -47,28 +67,25 @@ FILLS_DIR = Path("fills")
 
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
+
 def extract_date(text: str) -> str:
     m = DATE_RE.search(text)
     if not m:
         raise ValueError(f"Could not find YYYY-MM-DD in: {text}")
     return m.group(0)
 
+
 def expected_lob_name(day: str) -> str:
-    # LOB filenames: 2025-12-20_BTCUSDT_ob200.data
     return f"{day}_{SYMBOL}_ob200.data"
 
+
 def match_lob_file_for_trade(trade_file: Path, lob_dir: Path) -> Optional[Path]:
-    """
-    Trades: {SYMBOL}_YYYY-MM-DD.csv
-    LOB:    YYYY-MM-DD_{SYMBOL}_ob200.data
-    """
     day = extract_date(trade_file.stem)
 
     exact = lob_dir / expected_lob_name(day)
     if exact.exists():
         return exact
 
-    # Fuzzy fallback
     candidates = []
     for p in lob_dir.iterdir():
         name = p.name
@@ -81,10 +98,12 @@ def match_lob_file_for_trade(trade_file: Path, lob_dir: Path) -> Optional[Path]:
     candidates.sort(key=lambda x: len(x.name))
     return candidates[0]
 
+
 def list_trade_files_sorted_by_date(folder: Path) -> List[Path]:
     files = [p for p in folder.iterdir() if p.suffix.lower() == ".csv"]
     files.sort(key=lambda p: extract_date(p.stem))
     return files
+
 
 def lob_dir_date_range_hint(lob_dir: Path) -> str:
     dates = []
@@ -97,6 +116,7 @@ def lob_dir_date_range_hint(lob_dir: Path) -> str:
     dates.sort()
     return f"LOB_DIR date range looks like: {dates[0]} .. {dates[-1]}"
 
+
 def filter_matched_days(trade_files: List[Path], lob_dir: Path) -> List[Tuple[Path, Path]]:
     pairs = []
     for tf in trade_files:
@@ -107,6 +127,20 @@ def filter_matched_days(trade_files: List[Path], lob_dir: Path) -> List[Tuple[Pa
     return pairs
 
 
+def choose_start_ts(trades_df: pd.DataFrame) -> int:
+    first_ts = int(trades_df["timestamp"].iloc[0])
+
+    if WINDOW_START_MODE == "day_start":
+        return first_ts
+
+    if WINDOW_START_MODE == "hour_utc":
+        day_start = (first_ts // (24 * 60 * 60 * 1000)) * (24 * 60 * 60 * 1000)
+        target = day_start + START_HOUR_UTC * 60 * 60 * 1000
+        return max(first_ts, target)
+
+    raise ValueError(f"Unsupported WINDOW_START_MODE={WINDOW_START_MODE}")
+
+
 # ============================================================
 # Main
 # ============================================================
@@ -115,6 +149,9 @@ def main():
     print(f"SYMBOL={SYMBOL}  MONTH={MONTH}")
     print(f"TRADES_DIR={TRADES_DIR}")
     print(f"LOB_DIR={LOB_DIR}")
+    print(f"SIDE={SIDE}")
+    print(f"HORIZON_STEPS={HORIZON_STEPS}  HORIZON_MS={HORIZON_MS}")
+    print(f"USE_FIXED_QTY={USE_FIXED_QTY}  FIXED_QTY={FIXED_QTY}")
 
     if not TRADES_DIR.exists():
         raise ValueError(f"TRADES_DIR does not exist: {TRADES_DIR}")
@@ -139,33 +176,37 @@ def main():
     train_pairs = matched_pairs[:TRAIN_DAYS]
     test_pairs = matched_pairs[TRAIN_DAYS:TRAIN_DAYS + TEST_DAYS]
 
-    # ---- Build curve from TRAIN trades ----
-    from curve import Bin_Weight  # must exist in curve.py
+    # ---- Build daily curve from TRAIN trades ----
+    from curve import Bin_Weight
 
     all_train_weights = [Bin_Weight(str(trade_csv)) for (trade_csv, _) in train_pairs]
     avg_curve_weights = pd.DataFrame(all_train_weights).median(axis=0).to_numpy()
     avg_curve_weights = (avg_curve_weights / avg_curve_weights.sum()).tolist()
 
-    # ---- Run VWAP on TEST days ----
     rows = []
     for trade_csv, lob_file in test_pairs:
         day = extract_date(trade_csv.stem)
+        trades_df = pd.read_csv(trade_csv).sort_values("timestamp").reset_index(drop=True)
 
-        # Load trades once (used for Q conversion + metrics)
-        trades_df = pd.read_csv(trade_csv)
+        start_ts_ms = choose_start_ts(trades_df)
 
-        # Convert notional to quantity in base asset units
-        px0 = float(trades_df["price"].iloc[0])
-        Q_day = float(NOTIONAL_USDT / px0)
+        if USE_FIXED_QTY:
+            Q_day = float(FIXED_QTY)
+        else:
+            px0 = float(trades_df["price"].iloc[0])
+            Q_day = float(NOTIONAL_USDT / px0)
 
-        sim = simulate_vwap_execution_day(
+        sim = simulate_vwap_execution_window(
             trade_csv=trade_csv,
             book_jsonl=lob_file,
             avg_curve_weights=avg_curve_weights,
             Q=Q_day,
             side=SIDE,
+            start_ts_ms=start_ts_ms,
+            horizon_ms=HORIZON_MS,
             participation_rate=PARTICIPATION_RATE,
             intra_bucket_slices=INTRA_BUCKET_SLICES,
+            force_terminal_completion=FORCE_TERMINAL_COMPLETION,
         )
 
         m = compute_execution_metrics(
@@ -176,28 +217,49 @@ def main():
             day_start=sim["day_start"],
             bucket_ms=BUCKET_MS,
             buckets_per_day=BUCKETS_PER_DAY,
-            arrival_price=None,
+            arrival_price=sim["arrival_price"],
         )
 
-        # Also compute bps slippage for easy comparison across assets
-        slippage_bps = 10_000 * float(m["slippage_vs_vwap"]) / float(m["market_vwap"]) if float(m["market_vwap"]) != 0 else 0.0
+        arrival_price = float(sim["arrival_price"])
+        market_vwap = float(m["market_vwap"])
+
+        is_bps = (
+            10_000 * float(sim["implementation_shortfall"]) / arrival_price
+            if arrival_price != 0
+            else 0.0
+        )
+
+        slippage_bps = (
+            10_000 * float(m["slippage_vs_vwap"]) / market_vwap
+            if market_vwap != 0
+            else 0.0
+        )
 
         row = {
             "day": day,
             "symbol": SYMBOL,
             "side": sim["side"],
-            "notional_usdt": NOTIONAL_USDT,
             "Q_qty": sim["Q"],
             "filled_qty": sim["filled_qty"],
             "completion_rate": sim["completion_rate"],
+            "arrival_price": arrival_price,
             "exec_vwap": float(m["exec_vwap"]),
-            "market_vwap": float(m["market_vwap"]),
-            "slippage_vs_vwap": float(m["slippage_vs_vwap"]),  # in price units (USDT per coin)
+            "market_vwap": market_vwap,
+            "implementation_shortfall": float(sim["implementation_shortfall"]),
+            "implementation_shortfall_bps": float(is_bps),
+            "slippage_vs_vwap": float(m["slippage_vs_vwap"]),
             "slippage_bps": float(slippage_bps),
-            "implementation_shortfall": float(m["implementation_shortfall"]),
             "participation_overall": float(m["participation_overall"]),
             "participation_rate_cap": sim["participation_rate"],
             "intra_bucket_slices": sim["intra_bucket_slices"],
+            "start_ts_ms": sim["start_ts_ms"],
+            "end_ts_ms": sim["end_ts_ms"],
+            "window_horizon_ms": sim["window_horizon_ms"],
+            "start_bucket": sim["start_bucket"],
+            "end_bucket": sim["end_bucket"],
+            "force_terminal_completion": sim["force_terminal_completion"],
+            "terminal_liq_qty": sim["terminal_liq_qty"],
+            "terminal_liq_avg_px": sim["terminal_liq_avg_px"],
             "lob_file": lob_file.name,
             "trade_file": trade_csv.name,
         }
@@ -206,21 +268,27 @@ def main():
         if SAVE_FILLS:
             from execution import save_fills_to_csv
             FILLS_DIR.mkdir(parents=True, exist_ok=True)
-            out_fills = FILLS_DIR / f"fills_{SYMBOL}_{day}_{SIDE}_notional{NOTIONAL_USDT}.csv"
+            out_fills = FILLS_DIR / f"fills_{SYMBOL}_{day}_{SIDE}_Q{Q_day}.csv"
             save_fills_to_csv(sim["fills"], out_fills)
 
         print(
             f"[DONE] {SYMBOL} {day}  "
-            f"slip={row['slippage_vs_vwap']:.6f}  ({row['slippage_bps']:.2f} bps)  "
-            f"completion={row['completion_rate']:.2%}"
+            f"IS={row['implementation_shortfall_bps']:.2f} bps  "
+            f"slip={row['slippage_bps']:.2f} bps  "
+            f"completion={row['completion_rate']:.2%}  "
+            f"terminal_liq={row['terminal_liq_qty']:.6f}"
         )
 
     results = pd.DataFrame(rows)
 
-    print("\n=== Summary (slippage_bps) ===")
-    print(results[["day", "slippage_bps", "completion_rate"]].to_string(index=False))
-    print("\n=== Describe ===")
-    print(results.describe(include="all"))
+    print("\n=== Daily Results (Implementation Shortfall bps) ===")
+    print(results[["day", "implementation_shortfall_bps", "completion_rate"]].to_string(index=False))
+
+    print("\n=== Summary (Implementation Shortfall bps) ===")
+    print(f"Mean IS (bps): {results['implementation_shortfall_bps'].mean():.4f}")
+    print(f"Std  IS (bps): {results['implementation_shortfall_bps'].std():.4f}")
+    print(f"Min  IS (bps): {results['implementation_shortfall_bps'].min():.4f}")
+    print(f"Max  IS (bps): {results['implementation_shortfall_bps'].max():.4f}")
 
     results.to_csv(OUT_RESULTS_CSV, index=False)
     print(f"\nSaved daily results to: {OUT_RESULTS_CSV.resolve()}")
@@ -228,4 +296,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

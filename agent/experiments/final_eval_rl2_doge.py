@@ -17,41 +17,13 @@ from env.exec_env import ExecEnv
 
 
 # -----------------------------------------------------------------------------
-# Top-model registry
+# RL² DOGE model registry
 # -----------------------------------------------------------------------------
-BTC_MODELS = [
+DOGE_RL2_MODELS = [
     {
-        "policy_name": "BTC_PPO_1",
-        "run_name": "BTC_S2B3_lr0.001_clip0.2_ent0.005_ep8_bs16_cl32_gamma0.99_lam0.9_seed2",
-        "ckpt": "checkpoints/BTC/BTC_S2B3_lr0.001_clip0.2_ent0.005_ep8_bs16_cl32_gamma0.99_lam0.9_seed2/best.weights.h5",
-    },
-    {
-        "policy_name": "BTC_PPO_2",
-        "run_name": "BTC_S2B1_lr0.001_clip0.2_ent0.01_ep8_bs16_cl32_gamma0.99_lam0.95_seed2",
-        "ckpt": "checkpoints/BTC/BTC_S2B1_lr0.001_clip0.2_ent0.01_ep8_bs16_cl32_gamma0.99_lam0.95_seed2/best.weights.h5",
-    },
-    {
-        "policy_name": "BTC_PPO_3",
-        "run_name": "BTC_S2B1_lr0.001_clip0.2_ent0.01_ep8_bs16_cl32_gamma0.999_lam0.95_seed2",
-        "ckpt": "checkpoints/BTC/BTC_S2B1_lr0.001_clip0.2_ent0.01_ep8_bs16_cl32_gamma0.999_lam0.95_seed2/best.weights.h5",
-    },
-]
-
-DOGE_MODELS = [
-    {
-        "policy_name": "DOGE_PPO_1",
-        "run_name": "DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0",
-        "ckpt": "checkpoints/DOGE/DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0/best.weights.h5",
-    },
-    {
-        "policy_name": "DOGE_PPO_2",
-        "run_name": "DOGE_S2B2_lr0.0003_clip0.2_ent0.005_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0",
-        "ckpt": "checkpoints/DOGE/DOGE_S2B2_lr0.0003_clip0.2_ent0.005_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0/best.weights.h5",
-    },
-    {
-        "policy_name": "DOGE_PPO_3",
-        "run_name": "DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.99_lam0.9_seed1_H4320_Q3e+06_pov0.1_fee0",
-        "ckpt": "checkpoints/DOGE/DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.99_lam0.9_seed1_H4320_Q3e+06_pov0.1_fee0/best.weights.h5",
+        "policy_name": "DOGE_RL2_1",
+        "run_name": "RL2_DOGE_DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0_trial4_rt64",
+        "ckpt": "checkpoints/RL2_DOGE/RL2_DOGE_DOGE_S2B1_lr0.0003_clip0.2_ent0.01_ep4_bs16_cl32_gamma0.999_lam0.95_seed1_H4320_Q3e+06_pov0.1_fee0_trial4_rt64/best.weights.h5",
     },
 ]
 
@@ -77,15 +49,6 @@ class EvalEpisode:
 
 
 ASSET_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "BTC": {
-        "side": "buy",
-        "horizon_steps": 4320,
-        "max_child_qty": 0.25,
-        "pov_cap": 0.05,
-        "taker_fee_rate": 0.0,
-        "size_grid": [10.0, 25.0, 50.0, 100.0, 200.0],
-        "models": BTC_MODELS,
-    },
     "DOGE": {
         "side": "buy",
         "horizon_steps": 4320,
@@ -93,7 +56,7 @@ ASSET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "pov_cap": 0.10,
         "taker_fee_rate": 0.0,
         "size_grid": [500_000.0, 1_000_000.0, 3_000_000.0, 6_000_000.0, 12_000_000.0],
-        "models": DOGE_MODELS,
+        "models": DOGE_RL2_MODELS,
     },
 }
 
@@ -104,7 +67,12 @@ def set_global_seed(seed: int) -> None:
     tf.random.set_seed(seed)
 
 
-class PPOPolicyRunner:
+class RL2PolicyRunner:
+    """
+    Uses the same recurrent actor-critic inference path as PPO.
+    This works if the RL² checkpoint was saved from the same model class.
+    """
+
     def __init__(self, ckpt_path: str, obs_dim: int = 7, hidden_units: int = 128, lstm_units: int = 128):
         self.ckpt_path = ckpt_path
         self.model = RecurrentActorCritic(obs_dim=obs_dim, hidden_units=hidden_units, lstm_units=lstm_units)
@@ -140,14 +108,12 @@ class TWAPPolicyRunner:
         elapsed_steps = int(env.t)
         horizon_steps = max(int(env.horizon_steps), 1)
 
-        # Ideal TWAP target completion by the end of this step
         target_done_frac = min((elapsed_steps + 1) / horizon_steps, 1.0)
         target_done_qty = target_done_frac * float(env.target_qty)
 
         done_qty = float(env.filled_total)
         deficit_qty = max(target_done_qty - done_qty, 0.0)
 
-        # Convert desired child size into action fraction of remaining inventory
         action = deficit_qty / max(float(env.remaining_qty), 1e-12)
         return float(np.clip(action, 0.0, 1.0))
 
@@ -403,16 +369,12 @@ def summarise_results(per_episode: pd.DataFrame) -> pd.DataFrame:
             "mean_remaining_qty": float(g["remaining_qty"].mean()),
             "mean_completion": float(np.mean(completion_vals)) if len(completion_vals) else float("nan"),
             "completion_rate_100pct": float(np.mean(g["completion_100pct"].values)) if len(g) else float("nan"),
-
-            # Main dissertation metric
             "mean_true_is_bps": float(np.mean(true_is_vals)) if len(true_is_vals) else float("nan"),
             "std_true_is_bps": float(np.std(true_is_vals, ddof=1)) if len(true_is_vals) > 1 else 0.0,
             "median_true_is_bps": float(np.median(true_is_vals)) if len(true_is_vals) else float("nan"),
             "p90_true_is_bps": float(np.percentile(true_is_vals, 90)) if len(true_is_vals) else float("nan"),
             "p95_true_is_bps": float(np.percentile(true_is_vals, 95)) if len(true_is_vals) else float("nan"),
             "p99_true_is_bps": float(np.percentile(true_is_vals, 99)) if len(true_is_vals) else float("nan"),
-
-            # Keep old internal environment metric for reference
             "mean_env_cost_bps": float(np.mean(env_cost_vals)) if len(env_cost_vals) else float("nan"),
             "std_env_cost_bps": float(np.std(env_cost_vals, ddof=1)) if len(env_cost_vals) > 1 else 0.0,
         }
@@ -474,7 +436,7 @@ def evaluate_asset(
 
         policies: List[Tuple[str, Any, Optional[Dict[str, str]]]] = [("TWAP", TWAPPolicyRunner(), None)]
         for spec in model_specs:
-            policies.append((spec["policy_name"], PPOPolicyRunner(spec["ckpt"]), spec))
+            policies.append((spec["policy_name"], RL2PolicyRunner(spec["ckpt"]), spec))
 
         traj_dir = os.path.join(scenario_out, "trajectories")
         if trajectory_episodes > 0:
@@ -505,7 +467,7 @@ def evaluate_asset(
                 all_episode_rows.append(row)
 
                 if traj_df is not None and len(traj_df) > 0:
-                    traj_path = os.path.join(traj_dir, f"{policy_name}_episode_{ep_idx:04d}.csv")
+                    traj_path = os.path.join(scenario_out, "trajectories", f"{policy_name}_episode_{ep_idx:04d}.csv")
                     traj_df.to_csv(traj_path, index=False)
 
         scenario_episode_df = pd.DataFrame(
@@ -546,8 +508,8 @@ def evaluate_asset(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Final evaluation runner for PPO-LSTM execution models.")
-    p.add_argument("--asset", type=str, required=True, choices=["BTC", "DOGE"], help="Asset to evaluate.")
+    p = argparse.ArgumentParser(description="Final evaluation runner for RL² DOGE execution model.")
+    p.add_argument("--asset", type=str, required=True, choices=["DOGE"], help="Asset to evaluate.")
     p.add_argument(
         "--data_root",
         type=str,
@@ -557,7 +519,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--output_root",
         type=str,
-        default="results_true_is",
+        default="results_true_is_rl2_doge",
         help="Where to write evaluation outputs.",
     )
     p.add_argument("--n_episodes", type=int, default=100, help="Episodes per size scenario.")

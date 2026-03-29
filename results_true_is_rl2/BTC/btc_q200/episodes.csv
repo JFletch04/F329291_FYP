@@ -1,0 +1,11 @@
+asset,scenario_name,day_path,day_name,start_idx,target_qty,horizon_steps
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-29_steps_5s.parquet,2026-01-29_steps_5s.parquet,5081,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-25_steps_5s.parquet,2026-01-25_steps_5s.parquet,6643,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-28_steps_5s.parquet,2026-01-28_steps_5s.parquet,11486,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-31_steps_5s.parquet,2026-01-31_steps_5s.parquet,1579,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-23_steps_5s.parquet,2026-01-23_steps_5s.parquet,3876,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-26_steps_5s.parquet,2026-01-26_steps_5s.parquet,6599,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-09_steps_5s.parquet,2026-01-09_steps_5s.parquet,2723,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-29_steps_5s.parquet,2026-01-29_steps_5s.parquet,4263,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-19_steps_5s.parquet,2026-01-19_steps_5s.parquet,1176,200.0,4320
+BTC,btc_q200,/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/January/2026-01-21_steps_5s.parquet,2026-01-21_steps_5s.parquet,8839,200.0,4320

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -54,9 +53,6 @@ def compute_bucket_volumes(
     bucket_ms: int,
     buckets_per_day: int,
 ) -> np.ndarray:
-    """
-    Returns array of market volume per bucket.
-    """
     bucket_idx = ((trades["timestamp"] - day_start) // bucket_ms).astype(int)
     mask = (bucket_idx >= 0) & (bucket_idx < buckets_per_day)
 
@@ -70,9 +66,6 @@ def fills_by_bucket(
     fills: List[Dict] | List[object],
     buckets_per_day: int,
 ) -> np.ndarray:
-    """
-    Returns array of executed qty per bucket based on fill.bucket.
-    """
     out = np.zeros(buckets_per_day, dtype=float)
     for f in fills:
         if isinstance(f, dict):
@@ -86,28 +79,25 @@ def fills_by_bucket(
     return out
 
 
-# ----------------------------
-# Main metric computation
-# ----------------------------
 def compute_execution_metrics(
     *,
     fills: List[Dict] | List[object],
     trades: pd.DataFrame,
-    side: str,                    # "buy" or "sell"
-    Q: float,                     # parent order size
+    side: str,
+    Q: float,
     day_start: int,
     bucket_ms: int,
     buckets_per_day: int,
-    arrival_price: Optional[float] = None,  # if None, use first trade price as a proxy
+    arrival_price: Optional[float] = None,
 ) -> Dict[str, float | np.ndarray]:
     """
-    Produces a dict of standard execution metrics.
+    Standard execution metrics.
 
     Notes:
     - Slippage vs VWAP is side-aware so + means worse:
         buy: exec - mkt_vwap
         sell: mkt_vwap - exec
-    - Implementation shortfall (IS) is also side-aware and uses arrival_price:
+    - Implementation shortfall (IS):
         buy: exec - arrival
         sell: arrival - exec
     """
@@ -116,18 +106,12 @@ def compute_execution_metrics(
     if side not in {"buy", "sell"}:
         raise ValueError("side must be 'buy' or 'sell'")
 
-    # Market VWAP
     mkt_vwap, mkt_vol, mkt_notional = market_vwap_from_trades(trades)
-
-    # Execution VWAP
     exec_vwap, exec_qty, exec_notional = exec_vwap_from_fills(fills)
 
-    # Arrival price
     if arrival_price is None:
-        # simplest proxy: first trade price of the day
         arrival_price = float(trades["price"].iloc[0]) if len(trades) else 0.0
 
-    # Side-aware slippage (positive = worse)
     if side == "buy":
         slippage_vs_vwap = exec_vwap - mkt_vwap
         implementation_shortfall = exec_vwap - arrival_price
@@ -136,15 +120,11 @@ def compute_execution_metrics(
         implementation_shortfall = arrival_price - exec_vwap
 
     completion_rate = safe_div(exec_qty, Q)
-
-    # Participation overall
     participation_overall = safe_div(exec_qty, mkt_vol)
 
-    # Participation per bucket
     mkt_bucket_vols = compute_bucket_volumes(trades, day_start, bucket_ms, buckets_per_day)
     exec_bucket_qty = fills_by_bucket(fills, buckets_per_day)
 
-    # Avoid division by zero per bucket
     part_per_bucket = np.zeros(buckets_per_day, dtype=float)
     nonzero = mkt_bucket_vols > 0
     part_per_bucket[nonzero] = exec_bucket_qty[nonzero] / mkt_bucket_vols[nonzero]
@@ -167,13 +147,7 @@ def compute_execution_metrics(
     }
 
 
-# ----------------------------
-# Pretty-print helper (optional)
-# ----------------------------
 def summarize_metrics(metrics: Dict[str, float | np.ndarray]) -> str:
-    """
-    Returns a human-readable multi-line summary.
-    """
     lines = []
     lines.append(f"Market VWAP:               {metrics['market_vwap']:.6f}")
     lines.append(f"Execution VWAP:            {metrics['exec_vwap']:.6f}")
@@ -181,7 +155,6 @@ def summarize_metrics(metrics: Dict[str, float | np.ndarray]) -> str:
     lines.append(f"Arrival price:             {metrics['arrival_price']:.6f}")
     lines.append(f"Implementation shortfall:  {metrics['implementation_shortfall']:.6f} (positive=worse)")
     lines.append(f"Executed qty:              {metrics['exec_qty']:.6f}")
-    lines.append(f"Parent order qty:          {metrics.get('Q', 'n/a')}")
     lines.append(f"Completion rate:           {metrics['completion_rate']:.2%}")
     lines.append(f"Participation overall:     {metrics['participation_overall']:.2%}")
     return "\n".join(lines)
