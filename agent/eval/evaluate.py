@@ -2,12 +2,11 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Any
-
 from agent.runner.lstm_policy import LSTMPolicy
 from agent.runner.collector import EpisodeStats
 
 
-# Aggregate the evaluation metrics
+# Aggregated evaluation metrics across all episodes
 @dataclass
 class EvalMetrics:
     n_episodes: int
@@ -18,9 +17,8 @@ class EvalMetrics:
     mean_cost_cash_vs_mid: float
 
 
-# Convert the episode stats into IS (bps)
 def _is_bps_from_stats(s: EpisodeStats) -> float:
-    # Express the execution cost in bps of arrival notional
+    # Express execution cost as implementation shortfall in bps of arrival notional
     denom = s.filled_total * s.arrival_mid
     if denom <= 0 or math.isnan(denom):
         return float("nan")
@@ -28,8 +26,7 @@ def _is_bps_from_stats(s: EpisodeStats) -> float:
 
 
 def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic: bool = True) -> EvalMetrics:
-    # Run the evaluation episodes with no learning to initialise
-
+    # Run evaluation episodes with no policy updates
     returns: List[float] = []
     steps: List[int] = []
     is_bps: List[float] = []
@@ -38,14 +35,12 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
 
     for _ in range(n_episodes):
         obs, _ = env.reset()
-        policy.reset()  # reset the hidden state each episode to keep stable
+        policy.reset()  # reset hidden state at the start of each episode
         done = False
         ep_ret = 0.0
         info_last: Dict[str, Any] = {}
-
         t = 0
 
-        # Running of an episode
         while not done:
             ps = policy.step(obs, deterministic=deterministic)
             obs, r, terminated, truncated, info = env.step(ps.action)
@@ -55,7 +50,7 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
             if info:
                 info_last = info
 
-        # Build the episode stats
+        # Build episode stats from final environment info
         s = EpisodeStats(
             episode_return=ep_ret,
             steps=t,
@@ -70,16 +65,16 @@ def evaluate_policy(env, policy: LSTMPolicy, n_episodes: int = 50, deterministic
         steps.append(s.steps)
         costs.append(s.cost_cash_vs_mid)
 
-        # Compute IS (bps)
+        # Compute IS in bps, skip if result is invalid
         isbps = _is_bps_from_stats(s)
         if not math.isnan(isbps):
             is_bps.append(isbps)
 
-        # Completion ratio
+        # Completion ratio — filled quantity as a fraction of the target
         if s.filled_total > 0 and not math.isnan(s.filled_total):
             completion.append(s.filled_total / env.target_qty)
 
-    # Aggregate the metrics
+    # Aggregate metrics across all episodes
     return EvalMetrics(
         n_episodes=n_episodes,
         mean_return=float(np.mean(returns)) if returns else float("nan"),

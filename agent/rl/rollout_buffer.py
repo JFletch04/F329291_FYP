@@ -55,16 +55,15 @@ class RolloutBuffer:
 
         i = 0
         while i < N:
-            # determine episode segment [i, j] inclusive
+            # find the end of the current episode
             j = i
             while j < N and not dones[j]:
                 j += 1
-            # j is either N or index where done=True
-            ep_end = min(j, N - 1)  # last index in episode
+            ep_end = min(j, N - 1)
             if j < N and dones[j]:
                 ep_end = j
 
-            # now chunk this episode segment
+            # split episode into fixed-length chunks
             ep_i = i
             while ep_i <= ep_end:
                 L = min(self.chunk_len, ep_end - ep_i + 1)
@@ -104,7 +103,7 @@ class RolloutBuffer:
         chunk_starts, chunk_lens = self._split_into_chunks(rollout)
         Cn = len(chunk_starts)
 
-        # Allocate padded arrays
+        # allocate padded arrays — zeros for padding, mask tracks valid steps
         obs_c = np.zeros((Cn, T, obs_dim), dtype=np.float32)
         actions_c = np.zeros((Cn, T, 1), dtype=np.float32)
         raw_u_c = np.zeros((Cn, T, 1), dtype=np.float32)
@@ -114,7 +113,7 @@ class RolloutBuffer:
         ret_c = np.zeros((Cn, T), dtype=np.float32)
         mask_c = np.zeros((Cn, T), dtype=np.float32)
 
-        # Initial LSTM state per chunk (taken from stored state BEFORE first step in chunk)
+        # initial LSTM state per chunk taken from stored state before first step
         h0 = np.zeros((Cn, lstm_units), dtype=np.float32)
         c0 = np.zeros((Cn, lstm_units), dtype=np.float32)
 
@@ -133,8 +132,7 @@ class RolloutBuffer:
             h0[ci] = h[st]
             c0[ci] = c[st]
 
-            # Sanity: if this chunk doesn't start at episode start,
-            # it still uses the correct carried state because we stored (h,c) per step.
+            # carried state is correct because (h,c) was stored per step during rollout
 
         return {
             "obs": obs_c,

@@ -52,7 +52,7 @@ class Book:
         self.has_snapshot: bool = False
 
     def apply_snapshot(self, bids: List[List[str]], asks: List[List[str]]):
-        #clear the previous existing book
+        # clear the existing book before applying snapshot
         self.bids.clear()
         self.asks.clear()
         for p_str, s_str in bids:
@@ -85,7 +85,6 @@ class Book:
             else:
                 self.asks[p] = s
 
-    #get the best bid from the bid and ask price, returns optinally, a tuple of floats as we converted to floats ealier
     def best_bid_ask(self) -> Tuple[Optional[float], Optional[float]]:
         if not self.bids or not self.asks:
             return None, None
@@ -111,7 +110,6 @@ def load_trades_csv(trades_csv_path: str) -> pd.DataFrame:
     Expect columns: id,timestamp,price,volume,side,rpi (as in your snippet)
     """
     df = pd.read_csv(trades_csv_path)
-    # Ensure types
     df["timestamp"] = df["timestamp"].astype("int64")
     df["price"] = df["price"].astype("float64")
     df["volume"] = df["volume"].astype("float64")
@@ -120,25 +118,22 @@ def load_trades_csv(trades_csv_path: str) -> pd.DataFrame:
     return df
 
 
-
 def build_replay_day(
     lob_jsonl_path: str,
     trades_csv_path: str,
     out_parquet_path: str,
     top_n_levels: int = 50,
     grid_ms: int = GRID_MS,
-    use_ts_field: str = "ts",  # use "ts" from your JSON
+    use_ts_field: str = "ts",
 ):
     trades = load_trades_csv(trades_csv_path)
     trade_i = 0
     n_trades = len(trades)
 
-    # We will aggregate trades into buckets keyed by grid timestamp.
-    # We'll do this on the fly using a moving pointer.
     def consume_trades_up_to(bucket_end_ts: int, bucket_start_ts: int) -> TradeAgg:
+        # consume trades in (bucket_start_ts, bucket_end_ts] using a moving pointer
         nonlocal trade_i
         agg = TradeAgg()
-        # Consume trades with (bucket_start_ts, bucket_end_ts]
         while trade_i < n_trades and trades.loc[trade_i, "timestamp"] <= bucket_end_ts:
             ts = int(trades.loc[trade_i, "timestamp"])
             if ts > bucket_start_ts:  # open on left
@@ -163,7 +158,6 @@ def build_replay_day(
                 continue
             msg = json.loads(line)
 
-            # timestamp to drive replay (ms)
             ts = int(msg[use_ts_field])
             last_seen_ts = ts
 
@@ -174,26 +168,25 @@ def build_replay_day(
 
             if msg_type == "snapshot":
                 book.apply_snapshot(bids, asks)
-                # initialise grid once we have first snapshot
+                # initialise grid once we have the first snapshot
                 if next_grid_ts is None:
                     next_grid_ts = ceil_to_grid(ts, grid_ms)
             elif msg_type == "delta":
                 if not book.has_snapshot:
-                    # Ignore deltas before first snapshot
+                    # ignore deltas before first snapshot
                     continue
                 book.apply_delta(bids, asks)
             else:
-                # unknown type
                 continue
 
             if next_grid_ts is None or not book.has_snapshot:
                 continue
 
-            # Emit as many grid rows as we've crossed
+            # emit a row for each grid boundary we've crossed
             while next_grid_ts <= ts:
                 bb, ba = book.best_bid_ask()
                 if bb is None or ba is None or bb >= ba:
-                    # Skip invalid book states (should be rare)
+                    # skip invalid book states
                     next_grid_ts += grid_ms
                     continue
 
@@ -230,27 +223,26 @@ def build_replay_day(
         raise RuntimeError("No rows produced. Check file paths, timestamps, and snapshot presence.")
 
     df_out = pd.DataFrame(rows)
-    # Some rows may have empty ladders if book got weird; you can drop those if you want:
+    # drop rows with empty ladders
     df_out = df_out[df_out["bid_prices"].map(len) > 0]
     df_out = df_out[df_out["ask_prices"].map(len) > 0]
 
-    # Write parquet
     df_out.to_parquet(out_parquet_path, index=False)
     print(f"Wrote {len(df_out):,} rows to {out_parquet_path}")
     print(df_out.head(3))
 
 
 if __name__ == "__main__":
-    # TODO: Set these paths for your Jan 1 files
-    LOB_JSONL = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_LOB/January/2026-01-01_DOGEUSDT_ob200.data"
-    TRADES_CSV = "/Users/jackfletcher/Desktop/FYP_Data/BTCUSDT_trades/January/DOGEUSDT_2026-01-01.csv"
-    OUT_PARQUET = "/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet"
+    # TODO: set these paths for your files
+    LOB_JSONL = "./data/BTCUSDT_LOB/January/2026-01-01_DOGEUSDT_ob200.data"
+    TRADES_CSV = "./data/BTCUSDT_trades/January/DOGEUSDT_2026-01-01.csv"
+    OUT_PARQUET = "./data/2026-01-01_steps_5s.parquet"
 
     build_replay_day(
         lob_jsonl_path=LOB_JSONL,
         trades_csv_path=TRADES_CSV,
         out_parquet_path=OUT_PARQUET,
-        top_n_levels=10,     # start with 50, you can bump to 200 later
+        top_n_levels=10,
         grid_ms=5_000,
-        use_ts_field="ts",   # your JSON has "ts"
+        use_ts_field="ts",
     )

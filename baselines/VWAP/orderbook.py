@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +12,6 @@ class OrderBook:
     - apply_snapshot(bids, asks)
     - apply_delta(bids, asks)
     - best_bid(), best_ask()
-    
     bids/asks are stored as dict: price -> size
     Prices are floats here for simplicity. (Later we can switch to int ticks for safety/speed.)
     """
@@ -43,7 +41,7 @@ class OrderBook:
         - else: set/update size
         """
         if not self.initialized:
-            # Can't safely apply deltas without an initial snapshot
+            # can't safely apply deltas without an initial snapshot
             return
         self._apply_levels(self.bids, bids)
         self._apply_levels(self.asks, asks)
@@ -101,7 +99,6 @@ def replay_orderbook(jsonl_path: Path) -> Iterator[Tuple[int, OrderBook]]:
     NOTE: 'book' is mutable; if you need a snapshot copy, copy bids/asks.
     """
     book = OrderBook()
-
     for msg in iter_orderbook_messages(jsonl_path):
         ts = int(msg["ts"])
         typ = msg.get("type")
@@ -112,7 +109,7 @@ def replay_orderbook(jsonl_path: Path) -> Iterator[Tuple[int, OrderBook]]:
         elif typ == "delta":
             book.apply_delta(data.get("b", []), data.get("a", []))
         else:
-            # ignore unknown types
+            # ignore unknown message types
             continue
 
         yield ts, book

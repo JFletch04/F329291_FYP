@@ -20,7 +20,7 @@ class RunResult:
 # DOGE: data + env knobs
 # -----------------------------
 DOGE_SYMBOL = "DOGE"
-DOGE_DATA_ROOT = "/Users/jackfletcher/Desktop/FYP_Data/replay_5s_DOGE"
+DOGE_DATA_ROOT = "./data/replay_5s_DOGE"
 
 DOGE_ENV_KWARGS = dict(
     horizon_steps=4320,
@@ -33,6 +33,7 @@ DOGE_ENV_KWARGS = dict(
 
 
 def read_best_val_is_bps(csv_path: str) -> float:
+    # read the best validation IS from the training log
     best = float("inf")
     with open(csv_path, "r", newline="") as f:
         reader = csv.DictReader(f)
@@ -73,7 +74,7 @@ def is_run_complete(config: Dict) -> bool:
     except Exception:
         return False
 
-    # If you want to require checkpoint existence too, uncomment:
+    # if you want to require checkpoint existence too, uncomment:
     # if not os.path.exists(best_ckpt_path):
     #     return False
 
@@ -81,6 +82,7 @@ def is_run_complete(config: Dict) -> bool:
 
 
 def load_existing_result(config: Dict) -> RunResult:
+    # load results from a previously completed run without rerunning
     run_name = config["run_name"]
     csv_path, _, best_ckpt_path = get_run_paths(run_name)
     best_val = read_best_val_is_bps(csv_path)
@@ -95,7 +97,6 @@ def load_existing_result(config: Dict) -> RunResult:
 
 def run_training(config: Dict) -> RunResult:
     run_name = config["run_name"]
-
     csv_path, _, best_ckpt_path = get_run_paths(run_name)
 
     cmd = [
@@ -160,7 +161,6 @@ def make_configs() -> List[Dict]:
     Stage 2: gamma/lambda sweep over top-3 Stage 1 base configs.
     Total runs = 3 bases * 3 gammas * 2 lams * 3 seeds = 54
     """
-
     base_configs = [
         dict(lr=3e-4, clip_eps=0.2, ent_coef=0.01,  ppo_epochs=4, batch_size_chunks=16, chunk_len=32),
         dict(lr=3e-4, clip_eps=0.2, ent_coef=0.005, ppo_epochs=4, batch_size_chunks=16, chunk_len=32),
@@ -220,6 +220,7 @@ def make_configs() -> List[Dict]:
 
 
 def write_summary_csv(path: str, results: List[RunResult]) -> None:
+    # write all run results to a summary CSV with config columns appended
     if not results:
         return
 
@@ -255,6 +256,7 @@ def main():
 
         try:
             if is_run_complete(cfg):
+                # skip and load if this run already completed
                 res = load_existing_result(cfg)
                 results.append(res)
                 print(f"⏭️  Skipping completed run: {res.run_name} (best_val_is_bps={res.best_val_is_bps:.6f})")
@@ -263,7 +265,7 @@ def main():
                 results.append(res)
                 print(f"✅ {res.run_name}: best_val_is_bps={res.best_val_is_bps:.6f}")
 
-            # Save progress after every successful/loaded run
+            # save progress after every run in case of interruption
             write_summary_csv(summary_path, results)
 
         except subprocess.CalledProcessError as e:
@@ -274,6 +276,7 @@ def main():
     if not results:
         raise RuntimeError("No successful runs completed.")
 
+    # sort by validation IS and print the top 3
     results.sort(key=lambda r: r.best_val_is_bps)
     top3 = results[:3]
 

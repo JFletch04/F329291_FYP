@@ -30,6 +30,7 @@ EXECENV_FIELDS = {"horizon_steps", "side", "target_qty", "max_child_qty", "pov_c
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
+
 def save_csv(rows, path):
     ensure_dir(os.path.dirname(path))
     if not rows:
@@ -39,10 +40,12 @@ def save_csv(rows, path):
         w.writeheader()
         w.writerows(rows)
 
+
 def percentile(x, p):
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
     return float(np.percentile(x, p)) if x.size else float("nan")
+
 
 def summarize_episode_rows(rows):
     is_bps = np.array([r["is_bps"] for r in rows if np.isfinite(r["is_bps"])], dtype=float)
@@ -71,45 +74,20 @@ def summarize_episode_rows(rows):
 # Deterministic episode control
 # -----------------------------
 def reseed_multiday_for_episode(env: MultiDayExecEnv, episode_seed: int):
-    """
-    Ensures episode_seed deterministically controls:
-      - chosen parquet day (via env.rng)
-      - env_seed used to create ExecEnv (via env.rng)
-      - start_idx within ExecEnv.reset (via ExecEnv.rng)
-
-    We do this without changing env code:
-      1) set MultiDayExecEnv.rng = RNG(episode_seed)
-      2) call reset() to construct a new ExecEnv
-      3) set ExecEnv.rng = RNG(episode_seed) BEFORE ExecEnv.reset() sampling happens
-
-    BUT: MultiDayExecEnv.reset() creates ExecEnv and then calls ExecEnv.reset().
-    So we can't intervene *inside* that call.
-
-    Therefore, we must reproduce MultiDayExecEnv.reset() logic externally:
-      - choose path and env_seed using MultiDay rng
-      - create ExecEnv ourselves with env_seed
-      - then reseed ExecEnv.rng to episode_seed
-      - then call ExecEnv.reset()
-
-    We'll implement that by swapping env._env directly.
-    """
-    # Seed the wrapper RNG so day/env_seed are deterministic
+    # reproduce MultiDayExecEnv.reset() deterministically so day choice,
+    # env_seed and start_idx are all controlled by episode_seed
     env.rng = np.random.default_rng(int(episode_seed))
 
-    # Reproduce MultiDayExecEnv.reset logic deterministically
     path_idx = int(env.rng.integers(0, len(env.parquet_paths)))
     path = env.parquet_paths[path_idx]
     env_seed = int(env.rng.integers(0, 1_000_000))
 
-    # Create ExecEnv with deterministic env_seed + stored execenv_kwargs
-    # NOTE: This requires ExecEnv import inside MultiDayExecEnv module, which you have.
     from env.exec_env import ExecEnv
     env._env = ExecEnv(path, seed=env_seed, **env.execenv_kwargs)
 
-    # NOW reseed ExecEnv.rng so start_idx becomes deterministic per episode_seed
+    # reseed ExecEnv.rng so start_idx is deterministic per episode_seed
     env._env.rng = np.random.default_rng(int(episode_seed))
 
-    # Return first obs by calling ExecEnv.reset
     return env._env.reset(seed=int(episode_seed))
 
 
@@ -135,7 +113,9 @@ def build_policy(obs_dim: int, hidden_units=128, lstm_units=128):
     policy = LSTMPolicy(model)
     return model, policy
 
+
 def warmup_build(policy, obs_dim: int):
+    # dummy forward pass to build the model before loading weights
     dummy_obs = np.zeros((1, obs_dim), dtype=np.float32)
     h, c = policy.initial_state(batch_size=1)
     _ = policy.act(dummy_obs, h, c, deterministic=True)
@@ -148,19 +128,16 @@ def run_episode(env: MultiDayExecEnv, policy, episode_seed: int, deterministic: 
     obs, _ = reseed_multiday_for_episode(env, episode_seed)
 
     h, c = policy.initial_state(batch_size=1)
-
     ep_return = 0.0
     step_rows = []
     last_info = {}
-
     prev_filled_total = 0.0
     prev_cost_cash = 0.0
-
     t = 0
     done = False
+
     while not done:
         obs_b = np.expand_dims(obs, axis=0).astype(np.float32)
-
         action, logp, value, (h, c) = policy.act(obs_b, h, c, deterministic=deterministic)
         a = float(np.asarray(action).reshape(-1)[0])
 
@@ -172,7 +149,6 @@ def run_episode(env: MultiDayExecEnv, policy, episode_seed: int, deterministic: 
         cost_cash = float(last_info.get("cost_cash_vs_mid", prev_cost_cash))
         step_filled = filled_total - prev_filled_total
         step_cost_cash = cost_cash - prev_cost_cash
-
         prev_filled_total = filled_total
         prev_cost_cash = cost_cash
 
@@ -182,15 +158,12 @@ def run_episode(env: MultiDayExecEnv, policy, episode_seed: int, deterministic: 
             "episode": int(ep_index),
             "episode_seed": int(episode_seed),
             "t": int(t),
-
             "reward": float(r),
             "action": float(a),
             "logp": float(np.asarray(logp).reshape(-1)[0]) if np.asarray(logp).size else float("nan"),
             "value": float(np.asarray(value).reshape(-1)[0]) if np.asarray(value).size else float("nan"),
-
             "step_filled": float(step_filled),
             "step_cost_cash_vs_mid": float(step_cost_cash),
-
             "filled_total": float(filled_total),
             "cost_cash_vs_mid": float(cost_cash),
         }
@@ -203,14 +176,13 @@ def run_episode(env: MultiDayExecEnv, policy, episode_seed: int, deterministic: 
             if k in last_info:
                 step_row[k] = float(last_info[k])
 
-        # Useful for later auditing: which parquet/day was used
+        # useful for later auditing: which parquet/day was used
         try:
             step_row["parquet_path"] = getattr(env, "_env").df  # not serializable; ignore
         except Exception:
             pass
 
         step_rows.append(step_row)
-
         obs = next_obs
         t += 1
 
@@ -236,19 +208,14 @@ def run_episode(env: MultiDayExecEnv, policy, episode_seed: int, deterministic: 
         "scenario": scenario_tag,
         "episode": int(ep_index),
         "episode_seed": int(episode_seed),
-
         "episode_return": float(ep_return),
-
         "is_bps": float(is_bps),
         "cost_cash_vs_mid": float(cost_cash),
-
         "filled_total": float(filled),
         "target_qty": float(target_qty),
         "remaining_qty": float(remaining),
-
         "arrival_mid": float(arrival_mid),
         "exec_vwap": float(exec_vwap),
-
         "completion": float(completion),
         "n_steps": int(t),
     }
@@ -264,7 +231,7 @@ def eval_model(env, policy, episode_seeds, deterministic, model_tag, scenario_ta
             deterministic=deterministic,
             ep_index=ep_i,
             model_tag=model_tag,
-            scenario_tag=scenario_tag
+            scenario_tag=scenario_tag,
         )
         ep_rows.append(ep_row)
         if log_steps:
@@ -276,9 +243,9 @@ def eval_model(env, policy, episode_seeds, deterministic, model_tag, scenario_ta
 # Main
 # -----------------------------
 def main():
-    nov_dir = "/Users/jackfletcher/Desktop/FYP_Data/Replay_5s/November"
-    dec_dir = "/Users/jackfletcher/Desktop/FYP_Data/Replay_5s/December"
-    jan_dir = "/Users/jackfletcher/Desktop/FYP_Data/Replay_5s/January"
+    nov_dir = "./data/Replay_5s/November"
+    dec_dir = "./data/Replay_5s/December"
+    jan_dir = "./data/Replay_5s/January"
 
     train_files, val_files, test_files = make_time_split(nov_dir=nov_dir, dec_dir=dec_dir, jan_dir=jan_dir)
     print(f"Train days: {len(train_files)} | Val days: {len(val_files)} | Test days: {len(test_files)}")
@@ -291,28 +258,27 @@ def main():
     seed_master = 12345
     log_step_traces = True
 
-    # MODELS: add multiple checkpoints
+    # models: add multiple checkpoints here as needed
     models = [
         {"tag": "best", "ckpt_path": "checkpoints/ppo_lstm/best.weights.h5"},
         # {"tag": "model2", "ckpt_path": "..."},
         # {"tag": "model3", "ckpt_path": "..."},
     ]
 
-    # SCENARIOS: ABSOLUTE values matching your dataset scale
+    # scenarios: absolute values matching your dataset scale
     scenarios = [
-        {"name": "default_buy",  "side": "buy",  "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
-        {"name": "small_buy",    "side": "buy",  "horizon_steps": 180, "target_qty": 0.25, "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
-        {"name": "large_buy",    "side": "buy",  "horizon_steps": 180, "target_qty": 1.0,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
-        {"name": "tight_pov",    "side": "buy",  "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.05, "taker_fee_rate": 0.0},
-        {"name": "short_horizon","side": "buy",  "horizon_steps": 120, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
-        {"name": "default_sell", "side": "sell", "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
+        {"name": "default_buy",   "side": "buy",  "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
+        {"name": "small_buy",     "side": "buy",  "horizon_steps": 180, "target_qty": 0.25, "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
+        {"name": "large_buy",     "side": "buy",  "horizon_steps": 180, "target_qty": 1.0,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
+        {"name": "tight_pov",     "side": "buy",  "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.05, "taker_fee_rate": 0.0},
+        {"name": "short_horizon", "side": "buy",  "horizon_steps": 120, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
+        {"name": "default_sell",  "side": "sell", "horizon_steps": 180, "target_qty": 0.5,  "max_child_qty": 0.05, "pov_cap": 0.10, "taker_fee_rate": 0.0},
     ]
 
-    # Fixed episode seeds (paired)
+    # fixed episode seeds shared across all models and scenarios
     rng = np.random.default_rng(seed_master)
     episode_seeds = rng.integers(0, 1_000_000, size=n_test_episodes, dtype=np.int64).tolist()
 
-    # Run folder
     run_ts = time.strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(out_root, f"run_{run_ts}")
     ensure_dir(run_dir)
@@ -334,9 +300,8 @@ def main():
         scen_tag = scen["name"]
         print(f"\n--- Scenario: {scen_tag} ---")
 
-        # Construct env with scenario params passed into execenv_kwargs
+        # construct env with scenario params passed into execenv_kwargs
         env_test = make_env_for_scenario(test_files, scen, seed_init=999)
-
         obs_dim = env_test.observation_space.shape[0]
 
         for m in models:
@@ -348,7 +313,6 @@ def main():
             model, policy = build_policy(obs_dim=obs_dim, hidden_units=128, lstm_units=128)
             warmup_build(policy, obs_dim=obs_dim)
             model.load_weights(ckpt_path)
-
             print(f"Loaded model={tag} ckpt={ckpt_path}")
 
             ep_rows, st_rows = eval_model(
@@ -357,7 +321,7 @@ def main():
                 deterministic=deterministic,
                 model_tag=tag,
                 scenario_tag=scen_tag,
-                log_steps=log_step_traces
+                log_steps=log_step_traces,
             )
 
             out_subdir = os.path.join(run_dir, f"scenario_{scen_tag}", f"model_{tag}")
@@ -377,7 +341,7 @@ def main():
                 "max_child_qty": scen.get("max_child_qty"),
                 "pov_cap": scen.get("pov_cap"),
                 "taker_fee_rate": scen.get("taker_fee_rate"),
-                **summ
+                **summ,
             })
 
             print(

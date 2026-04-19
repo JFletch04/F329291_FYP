@@ -23,6 +23,7 @@ def compute_gae(
 
     for t in reversed(range(N)):
         if dones[t]:
+            # terminal step — zero out bootstrap value
             next_nonterminal = 0.0
             next_value = 0.0
         else:

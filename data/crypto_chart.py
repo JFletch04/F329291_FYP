@@ -8,7 +8,7 @@ plt.rcParams["font.family"] = "serif"
 plt.rcParams["font.serif"] = ["Times New Roman"]
 
 # Load your replay dataset
-df = pd.read_parquet("/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/December/2025-12-01_steps_5s.parquet")
+df = pd.read_parquet("./data/Replay_5s_BTC/December/2025-12-01_steps_5s.parquet")
 
 # Convert timestamp column to datetime
 # Change "ts" if your timestamp column has a different name

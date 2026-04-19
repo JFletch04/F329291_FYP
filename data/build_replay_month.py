@@ -1,14 +1,11 @@
 import os
 from pathlib import Path
 from datetime import datetime
+from build_replay_day import build_replay_day
 
-from build_replay_day import build_replay_day  # adjust import if needed
-
-
-LOB_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/DOGEUSDT_LOB/January")
-TRADES_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/DOGEUSDT_trades/January")
-OUT_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data/replay_5s_DOGE")
-
+LOB_DIR = Path("./data/DOGEUSDT_LOB/January")
+TRADES_DIR = Path("./data/DOGEUSDT_trades/January")
+OUT_DIR = Path("./data/replay_5s_DOGE")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -23,14 +20,13 @@ def extract_date_from_trades(fname: str) -> str:
 
 
 def main():
-    # Build lookup for trades files by date
+    # build lookup for trades files by date
     trades_by_date = {}
     for f in TRADES_DIR.iterdir():
         if f.suffix == ".csv":
             date = extract_date_from_trades(f.name)
             trades_by_date[date] = f
 
-    # Loop through LOB files
     for lob_file in sorted(LOB_DIR.iterdir()):
         if not lob_file.name.endswith(".data"):
             continue
@@ -47,7 +43,6 @@ def main():
             continue
 
         print(f"[BUILD] {date}")
-
         build_replay_day(
             lob_jsonl_path=str(lob_file),
             trades_csv_path=str(trades_by_date[date]),
@@ -56,7 +51,6 @@ def main():
             grid_ms=5_000,
             use_ts_field="ts",
         )
-
         print(f"[DONE] {date}")
 
 

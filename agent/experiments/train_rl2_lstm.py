@@ -21,6 +21,7 @@ from data.splits import make_time_split, make_time_split_from_root
 from env.multi_day_task_env import MultiDayTaskEnv
 
 
+# presets — PPO-LSTM checkpoints used as RL² fine-tuning starting points
 PRESETS: Dict[str, Dict[str, object]] = {
     "BTC_PPO_1": {
         "symbol": "BTC",
@@ -188,6 +189,7 @@ def _resolve_split(args):
 
 
 def _build_model_and_load(obs_dim: int, base_ckpt: str) -> RecurrentActorCritic:
+    # warm up with dummy forward pass before loading weights
     model = RecurrentActorCritic(obs_dim=obs_dim, hidden_units=128, lstm_units=128)
     dummy_obs = tf.zeros((1, 1, obs_dim), dtype=tf.float32)
     _ = model(dummy_obs, initial_state=model.initial_state(batch_size=1), training=False)
@@ -199,6 +201,7 @@ def main():
     args = parse_args()
     cfg = dict(PRESETS[args.preset])
 
+    # fix seeds for reproducibility
     seed = int(cfg["seed"] if args.seed is None else args.seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
@@ -276,6 +279,7 @@ def main():
     print(f"log_path={log_path}")
     print(f"ckpt_dir={ckpt_dir}\n")
 
+    # RL² training loop — hidden state persists across episodes within each trial
     for it in range(1, 10_000):
         t0 = time.time()
 
@@ -338,7 +342,7 @@ def main():
         if improved:
             best_val_is = val_metrics.mean_is_bps
             bad_iters = 0
-            model.save_weights(os.path.join(ckpt_dir, "best.weights.h5"))
+            model.save_weights(os.path.join(ckpt_dir, "best.weights.h5"))  # save on improvement
         else:
             bad_iters += 1
 

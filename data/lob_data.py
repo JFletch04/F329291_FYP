@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Load your parquet file
-df = pd.read_parquet("/Users/jackfletcher/Desktop/FYP_Data/Replay_5s_BTC/December/2025-12-01_steps_5s.parquet")
+df = pd.read_parquet("./data/Replay_5s_BTC/December/2025-12-01_steps_5s.parquet")
 
 # Convert timestamp
 df["datetime"] = pd.to_datetime(df["ts"], unit="ms")
@@ -30,3 +30,6 @@ clean = df[
 clean.to_excel("lob_report.xlsx", index=False)
 
 print("Saved lob_report.xlsx")
+
+
+pd.read_json("file_path", lines=True)

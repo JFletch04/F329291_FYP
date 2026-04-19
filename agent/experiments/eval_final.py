@@ -17,7 +17,8 @@ from env.exec_env import ExecEnv
 
 
 # -----------------------------------------------------------------------------
-# Top-model registry
+# Top-model registry — top 3 PPO-LSTM checkpoints per asset selected from
+# the two-stage hyperparameter search (see Section 6.2 of the dissertation)
 # -----------------------------------------------------------------------------
 BTC_MODELS = [
     {
@@ -76,6 +77,7 @@ class EvalEpisode:
     start_idx: int
 
 
+# Per-asset execution constraints and order size grid
 ASSET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "BTC": {
         "side": "buy",
@@ -99,6 +101,7 @@ ASSET_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
 
 def set_global_seed(seed: int) -> None:
+    # Fix seeds across Python, NumPy and TensorFlow for reproducibility
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
@@ -109,6 +112,7 @@ class PPOPolicyRunner:
         self.ckpt_path = ckpt_path
         self.model = RecurrentActorCritic(obs_dim=obs_dim, hidden_units=hidden_units, lstm_units=lstm_units)
 
+        # Warm up the model with a dummy forward pass before loading weights
         dummy_obs = tf.zeros((1, 1, obs_dim), dtype=tf.float32)
         _ = self.model(dummy_obs, initial_state=self.model.initial_state(batch_size=1), training=False)
 
@@ -125,9 +129,9 @@ class PPOPolicyRunner:
 
 class TWAPPolicyRunner:
     """
-    Completion-seeking TWAP.
+    Completion-seeking TWAP baseline.
     Tracks an ideal linear schedule and trades enough each step to catch up if behind.
-    Still respects the environment's max_child_qty, pov_cap, and terminal liquidation.
+    Respects the environment's max_child_qty, pov_cap and terminal liquidation.
     """
 
     def reset(self) -> None:
@@ -154,8 +158,8 @@ class TWAPPolicyRunner:
 
 class EnvFactory:
     """
-    Reuses ExecEnv instances per (day_path, scenario) and force-resets them to a fixed start_idx.
-    This avoids modifying your core training env while making evaluation deterministic.
+    Reuses ExecEnv instances per (day_path, scenario) and force-resets them to a
+    fixed start_idx, keeping evaluation deterministic without touching the training env.
     """
 
     def __init__(self):
@@ -175,6 +179,7 @@ class EnvFactory:
                 seed=seed,
             )
 
+        # Update scenario parameters in case they differ from the cached instance
         env = self._cache[key]
         env.horizon_steps = int(scenario.horizon_steps)
         env.side = str(scenario.side).lower()
@@ -193,6 +198,7 @@ class EnvFactory:
                 f"Invalid start_idx={start_idx} for rows={len(env.df)} and horizon_steps={env.horizon_steps}"
             )
 
+        # Manually set the environment state to the fixed start position
         env.start_idx = int(start_idx)
         env.t = 0
         env.remaining_qty = env.target_qty
@@ -204,10 +210,10 @@ class EnvFactory:
 
 
 def make_scenarios(asset: str) -> List[EvalScenario]:
+    # Build one EvalScenario per order size in the asset's size grid
     asset = asset.upper()
     cfg = ASSET_DEFAULTS[asset]
     scenarios: List[EvalScenario] = []
-
     for qty in cfg["size_grid"]:
         qty_tag = f"{qty:g}".replace(".", "p")
         scenarios.append(
@@ -231,15 +237,15 @@ def sample_fixed_episodes(
     n_episodes: int,
     sample_seed: int,
 ) -> List[EvalEpisode]:
+    # Sample a fixed set of (day, start_idx) pairs using a deterministic seed
+    # so all strategies are evaluated on exactly the same episodes
     rng = np.random.default_rng(sample_seed)
     usable: List[Tuple[str, int]] = []
-
     for path in test_files:
         try:
             n_rows = len(pd.read_parquet(path, columns=["mid"]))
         except Exception:
             n_rows = len(pd.read_parquet(path))
-
         max_start = n_rows - scenario.horizon_steps - 1
         if max_start > 1:
             usable.append((path, max_start))
@@ -264,6 +270,7 @@ def sample_fixed_episodes(
 
 
 def _safe_env_cost_bps(cost_cash_vs_mid: float, target_qty: float, arrival_mid: float) -> float:
+    # Normalise execution cost by arrival notional to get bps, returns nan if invalid
     denom = float(target_qty) * float(arrival_mid)
     if denom <= 0 or math.isnan(denom):
         return float("nan")
@@ -271,9 +278,9 @@ def _safe_env_cost_bps(cost_cash_vs_mid: float, target_qty: float, arrival_mid: 
 
 
 def _true_is_bps(exec_vwap: float, arrival_mid: float, side: str) -> float:
+    # Implementation shortfall in bps — positive means worse than arrival for buys
     if arrival_mid <= 0 or math.isnan(arrival_mid) or math.isnan(exec_vwap):
         return float("nan")
-
     side = str(side).lower().strip()
     if side == "buy":
         return 1e4 * float(exec_vwap - arrival_mid) / float(arrival_mid)
@@ -304,6 +311,8 @@ def run_episode(
 
     while not done:
         action = float(policy_runner.act(obs, env))
+
+        # Snapshot pre-step state for trajectory logging
         remaining_before = float(env.remaining_qty)
         t_before = int(env.t)
         row_before = env._get_row(env.start_idx + env.t)
@@ -315,8 +324,8 @@ def run_episode(
         done = bool(terminated or truncated)
         info_last = info if info else info_last
         ep_ret += float(reward)
-
         executed_now = remaining_before - float(env.remaining_qty)
+
         traj_rows.append(
             {
                 "asset": episode.asset,
@@ -336,17 +345,17 @@ def run_episode(
                 "remaining_after": float(env.remaining_qty),
             }
         )
-
         obs = obs_next
         step_idx += 1
 
+    # Extract final episode metrics from the last info dict
     filled_total = float(info_last.get("filled_total", np.nan))
     arrival_mid = float(info_last.get("arrival_mid", np.nan))
     exec_vwap = float(info_last.get("exec_vwap", np.nan))
     cost_cash_vs_mid = float(info_last.get("cost_cash_vs_mid", np.nan))
     remaining_qty = float(info_last.get("remaining_qty", np.nan))
-    completion = filled_total / scenario.target_qty if scenario.target_qty > 0 else float("nan")
 
+    completion = filled_total / scenario.target_qty if scenario.target_qty > 0 else float("nan")
     env_cost_bps = _safe_env_cost_bps(cost_cash_vs_mid, scenario.target_qty, arrival_mid)
     true_is_bps = _true_is_bps(exec_vwap, arrival_mid, scenario.side)
 
@@ -381,6 +390,7 @@ def run_episode(
 
 
 def summarise_results(per_episode: pd.DataFrame) -> pd.DataFrame:
+    # Aggregate per-episode results into summary statistics per strategy and order size
     rows: List[Dict[str, Any]] = []
     group_cols = ["asset", "scenario_name", "target_qty", "policy_name"]
 
@@ -404,7 +414,7 @@ def summarise_results(per_episode: pd.DataFrame) -> pd.DataFrame:
             "mean_completion": float(np.mean(completion_vals)) if len(completion_vals) else float("nan"),
             "completion_rate_100pct": float(np.mean(g["completion_100pct"].values)) if len(g) else float("nan"),
 
-            # Main dissertation metric
+            # Primary dissertation metric — true IS relative to arrival mid
             "mean_true_is_bps": float(np.mean(true_is_vals)) if len(true_is_vals) else float("nan"),
             "std_true_is_bps": float(np.std(true_is_vals, ddof=1)) if len(true_is_vals) > 1 else 0.0,
             "median_true_is_bps": float(np.median(true_is_vals)) if len(true_is_vals) else float("nan"),
@@ -412,7 +422,7 @@ def summarise_results(per_episode: pd.DataFrame) -> pd.DataFrame:
             "p95_true_is_bps": float(np.percentile(true_is_vals, 95)) if len(true_is_vals) else float("nan"),
             "p99_true_is_bps": float(np.percentile(true_is_vals, 99)) if len(true_is_vals) else float("nan"),
 
-            # Keep old internal environment metric for reference
+            # Internal environment cost metric kept for reference
             "mean_env_cost_bps": float(np.mean(env_cost_vals)) if len(env_cost_vals) else float("nan"),
             "std_env_cost_bps": float(np.std(env_cost_vals, ddof=1)) if len(env_cost_vals) > 1 else 0.0,
         }
@@ -454,6 +464,7 @@ def evaluate_asset(
     all_episode_specs: List[Dict[str, Any]] = []
 
     for scenario_idx, scenario in enumerate(scenarios):
+        # Offset seed per scenario so episode samples don't overlap across order sizes
         scenario_seed = eval_seed + 10_000 * (scenario_idx + 1)
         scenario_out = os.path.join(asset_out, scenario.name)
         os.makedirs(scenario_out, exist_ok=True)
@@ -472,6 +483,7 @@ def evaluate_asset(
         episode_spec_df.to_csv(os.path.join(scenario_out, "episodes.csv"), index=False)
         all_episode_specs.extend(episode_spec_df.to_dict(orient="records"))
 
+        # TWAP is always included as the primary baseline alongside the PPO-LSTM models
         policies: List[Tuple[str, Any, Optional[Dict[str, str]]]] = [("TWAP", TWAPPolicyRunner(), None)]
         for spec in model_specs:
             policies.append((spec["policy_name"], PPOPolicyRunner(spec["ckpt"]), spec))
@@ -508,6 +520,7 @@ def evaluate_asset(
                     traj_path = os.path.join(traj_dir, f"{policy_name}_episode_{ep_idx:04d}.csv")
                     traj_df.to_csv(traj_path, index=False)
 
+        # Save per-scenario results after each scenario completes
         scenario_episode_df = pd.DataFrame(
             [r for r in all_episode_rows if r["scenario_name"] == scenario.name and r["asset"] == asset]
         )
@@ -516,6 +529,7 @@ def evaluate_asset(
         scenario_summary = summarise_results(scenario_episode_df)
         scenario_summary.to_csv(os.path.join(scenario_out, "summary.csv"), index=False)
 
+    # Save combined results across all scenarios
     all_episode_df = pd.DataFrame(all_episode_rows)
     all_episode_df.to_csv(os.path.join(asset_out, "per_episode_all.csv"), index=False)
 
@@ -524,6 +538,7 @@ def evaluate_asset(
 
     pd.DataFrame(all_episode_specs).to_csv(os.path.join(asset_out, "episodes_all.csv"), index=False)
 
+    # Write evaluation manifest for reproducibility
     manifest = {
         "asset": asset,
         "data_root": data_root,

@@ -155,7 +155,7 @@ def sample_start_indices(df: pd.DataFrame, horizon_steps: int, n: int, seed: int
 
 
 def main():
-    REPLAY_PARQUET = "/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet"
+    REPLAY_PARQUET = "./data/2026-01-01_steps_5s.parquet"
 
     df = pd.read_parquet(REPLAY_PARQUET)
 

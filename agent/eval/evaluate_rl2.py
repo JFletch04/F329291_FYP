@@ -1,14 +1,12 @@
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, List
-
 import numpy as np
-
 from agent.runner.lstm_policy import LSTMPolicy
 from agent.runner.collector_rl2 import EpisodeStatsRL2
 
 
-# Aggregating evaluation metrics across all the RL² trials
+# Aggregated evaluation metrics across all RL² trials
 @dataclass
 class EvalMetricsRL2:
     n_trials: int
@@ -21,8 +19,8 @@ class EvalMetricsRL2:
     mean_cost_cash_vs_mid: float
 
 
-# Converting episode stats into IS (implementation shortfall (bps))
 def _is_bps_from_stats(s: EpisodeStatsRL2) -> float:
+    # Convert episode cost into implementation shortfall in basis points
     denom = s.filled_total * s.arrival_mid
     if denom <= 0 or math.isnan(denom):
         return float("nan")
@@ -36,8 +34,8 @@ def evaluate_policy_rl2(
     episodes_per_trial: int = 4,
     deterministic: bool = True,
 ) -> EvalMetricsRL2:
-    # RL² evaluation: the hidden state persists across episodes within a trial
-
+    # RL² evaluation — hidden state persists across episodes within each trial
+    # and is only reset at the start of a new trial
     returns: List[float] = []
     steps: List[int] = []
     is_bps: List[float] = []
@@ -45,7 +43,7 @@ def evaluate_policy_rl2(
     costs: List[float] = []
 
     for _ in range(n_trials):
-        # Reset the hidden state once per trial
+        # Reset hidden state once per trial, not per episode
         policy.reset()
 
         for _ep in range(episodes_per_trial):
@@ -55,7 +53,6 @@ def evaluate_policy_rl2(
             info_last: Dict[str, Any] = {}
             t = 0
 
-            # Run the episode
             while not done:
                 ps = policy.step(obs, deterministic=deterministic)
                 obs, r, terminated, truncated, info = env.step(ps.action)
@@ -65,7 +62,7 @@ def evaluate_policy_rl2(
                 if info:
                     info_last = info
 
-            # Building the episode stats
+            # Build episode stats from final environment info
             s = EpisodeStatsRL2(
                 trial_id=0,
                 episode_in_trial=0,
@@ -82,18 +79,18 @@ def evaluate_policy_rl2(
             steps.append(s.steps)
             costs.append(s.cost_cash_vs_mid)
 
-            # Compute IS (bps)
+            # Compute IS in bps, skip if result is invalid
             isbps = _is_bps_from_stats(s)
             if not math.isnan(isbps):
                 is_bps.append(isbps)
 
-            # The completion ratio
+            # Completion ratio — filled quantity as a fraction of the target
             if s.filled_total > 0 and not math.isnan(s.filled_total):
                 completion.append(s.filled_total / env.target_qty)
 
     n_episodes = n_trials * episodes_per_trial
 
-    # Aggregate the final metrics
+    # Aggregate metrics across all trials and episodes
     return EvalMetricsRL2(
         n_trials=n_trials,
         episodes_per_trial=episodes_per_trial,

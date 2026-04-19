@@ -8,7 +8,7 @@ from agent.rl.gae import compute_gae
 
 
 def main():
-    env = ExecEnv("/Users/jackfletcher/Desktop/FYP_Data/2026-01-01_steps_5s.parquet")
+    env = ExecEnv("./data/2026-01-01_steps_5s.parquet")
 
     obs_dim = env.observation_space.shape[0]
     model = RecurrentActorCritic(obs_dim=obs_dim, hidden_units=128, lstm_units=128)

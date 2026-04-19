@@ -2,7 +2,6 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
-
 LOG_2PI = np.log(2.0 * np.pi)
 
 
@@ -15,21 +14,22 @@ class RecurrentActorCritic(tf.keras.Model):
     def __init__(self, obs_dim: int, hidden_units: int = 128, lstm_units: int = 128):
         super().__init__()
 
-        # Feature encoder
+        # feature encoder
         self.fc1 = layers.Dense(hidden_units, activation="tanh")
         self.fc2 = layers.Dense(hidden_units, activation="tanh")
 
-        # Memory
+        # memory
         self.lstm = layers.LSTM(
             lstm_units, return_sequences=True, return_state=True
         )
 
-        # Policy head
+        # policy head
         self.mu_head = layers.Dense(1, activation=None)
+
         # log_std as a trainable scalar (simple + stable)
         self.log_std = tf.Variable(initial_value=-0.5 * tf.ones((1,)), trainable=True)
 
-        # Value head
+        # value head
         self.v_head = layers.Dense(1, activation=None)
 
         self.obs_dim = obs_dim
@@ -41,7 +41,6 @@ class RecurrentActorCritic(tf.keras.Model):
         c = tf.zeros((batch_size, self.lstm_units), dtype=tf.float32)
         return (h, c)
 
-    #How the neural network transforms observations (and memory) into policy and value outputs.
     def call(self, obs_seq, initial_state=None, training=False):
         """
         obs_seq: [B, T, obs_dim]
@@ -49,12 +48,10 @@ class RecurrentActorCritic(tf.keras.Model):
         """
         x = self.fc1(obs_seq)
         x = self.fc2(x)
-
         if initial_state is None:
             lstm_out, h, c = self.lstm(x, training=training)
         else:
             lstm_out, h, c = self.lstm(x, initial_state=initial_state, training=training)
-
         mu = self.mu_head(lstm_out)
         v = self.v_head(lstm_out)
         return mu, self.log_std, v, (h, c)
@@ -75,7 +72,7 @@ def log_prob_squashed_gaussian(raw_u, mu, log_std):
     logp_u = normal_log_prob(raw_u, mu, log_std)  # [...,1]
     a = tf.sigmoid(raw_u)
     log_det = tf.math.log(a * (1.0 - a) + 1e-8)   # [...,1]
-    return tf.squeeze(logp_u - log_det, axis=-1)  # [...]
+    return tf.squeeze(logp_u - log_det, axis=-1)   # [...]
 
 
 def sample_action(mu, log_std):
@@ -96,20 +93,19 @@ def act_step(model: RecurrentActorCritic, obs_t, state, deterministic: bool):
     """
     obs_seq = tf.reshape(obs_t, (1, 1, model.obs_dim))  # [B=1, T=1, obs_dim]
     mu, log_std, v, next_state = model(obs_seq, initial_state=state, training=False)
-    mu = mu[:, :, :]   # [1,1,1] does nothing
-    v = tf.squeeze(v, axis=[0, 1, 2])  # scalar, converts [B, T, 1], to [1]
+    mu = mu[:, :, :]
+    v = tf.squeeze(v, axis=[0, 1, 2])  # scalar, converts [B, T, 1] to [1]
 
-    if deterministic: #Dont random sample, just use the mean of the gaussian 
-        #Used in evaluation, Testing, Backtesting as mu_head has been trained to give the best action
+    if deterministic:
+        # use the mean directly — no sampling, used at eval time
         raw_u = mu
-        a = tf.sigmoid(raw_u) #action = sigmoid of the mean
+        a = tf.sigmoid(raw_u)
     else:
-        #Used for training, Rollouts, Experience collection
+        # sample from the gaussian — used during training rollouts
         a, raw_u = sample_action(mu, log_std)
 
     logp = log_prob_squashed_gaussian(raw_u, mu, log_std)  # [1,1]
-    logp = tf.squeeze(logp, axis=[0, 1])  # scalar
-
-    a = tf.squeeze(a, axis=[0, 1, 2])     # scalar
-    raw_u = tf.squeeze(raw_u, axis=[0, 1, 2])  # scalar
+    logp = tf.squeeze(logp, axis=[0, 1])        # scalar
+    a = tf.squeeze(a, axis=[0, 1, 2])           # scalar
+    raw_u = tf.squeeze(raw_u, axis=[0, 1, 2])   # scalar
     return a, raw_u, logp, v, next_state

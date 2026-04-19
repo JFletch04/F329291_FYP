@@ -49,6 +49,7 @@ def ppo_update_step(
     grads = tape.gradient(total_loss, model.trainable_variables)
     grad_norm = tf.linalg.global_norm(grads)
 
+    # clip gradients before applying to prevent unstable updates in recurrent layers
     if max_grad_norm is not None:
         grads, _ = tf.clip_by_global_norm(grads, max_grad_norm)
 

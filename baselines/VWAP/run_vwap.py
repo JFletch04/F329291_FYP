@@ -21,7 +21,7 @@ from metrics import compute_execution_metrics
 SYMBOL = "BTCUSDT"   # "BTCUSDT" or "DOGEUSDT"
 MONTH = "January"
 
-BASE_DIR = Path("/Users/jackfletcher/Desktop/FYP_Data")
+BASE_DIR = Path("./data")
 
 TRADES_DIR = BASE_DIR / f"{SYMBOL}_trades" / MONTH
 LOB_DIR = BASE_DIR / f"{SYMBOL}_LOB" / MONTH
@@ -29,12 +29,9 @@ LOB_DIR = BASE_DIR / f"{SYMBOL}_LOB" / MONTH
 TRAIN_DAYS = 25
 TEST_DAYS = 6
 
-# Match DRL side more closely
 SIDE = "buy"
 
-# Use quantity consistent with your scenario when possible.
-# For BTC, if you want PPO-comparable evaluation, consider setting QTY directly to 50.0
-# rather than converting from notional.
+# use quantity consistent with your scenario when possible
 USE_FIXED_QTY = True
 FIXED_QTY = 10000.0
 
@@ -48,7 +45,6 @@ GRID_MS = 5_000
 HORIZON_STEPS = 4320
 HORIZON_MS = HORIZON_STEPS * GRID_MS
 
-# Window start:
 # "day_start" = start at first trade of the day
 # "hour_utc"  = start at a fixed UTC hour
 WINDOW_START_MODE = "day_start"
@@ -95,6 +91,7 @@ def match_lob_file_for_trade(trade_file: Path, lob_dir: Path) -> Optional[Path]:
     if not candidates:
         return None
 
+    # prefer shortest filename match if multiple candidates
     candidates.sort(key=lambda x: len(x.name))
     return candidates[0]
 
@@ -176,9 +173,8 @@ def main():
     train_pairs = matched_pairs[:TRAIN_DAYS]
     test_pairs = matched_pairs[TRAIN_DAYS:TRAIN_DAYS + TEST_DAYS]
 
-    # ---- Build daily curve from TRAIN trades ----
+    # build volume curve from train days using median to smooth outliers
     from curve import Bin_Weight
-
     all_train_weights = [Bin_Weight(str(trade_csv)) for (trade_csv, _) in train_pairs]
     avg_curve_weights = pd.DataFrame(all_train_weights).median(axis=0).to_numpy()
     avg_curve_weights = (avg_curve_weights / avg_curve_weights.sum()).tolist()
@@ -193,6 +189,7 @@ def main():
         if USE_FIXED_QTY:
             Q_day = float(FIXED_QTY)
         else:
+            # convert notional to qty using arrival price
             px0 = float(trades_df["price"].iloc[0])
             Q_day = float(NOTIONAL_USDT / px0)
 
@@ -223,6 +220,7 @@ def main():
         arrival_price = float(sim["arrival_price"])
         market_vwap = float(m["market_vwap"])
 
+        # express IS and slippage in basis points
         is_bps = (
             10_000 * float(sim["implementation_shortfall"]) / arrival_price
             if arrival_price != 0

@@ -7,6 +7,7 @@ import pandas as pd
 
 
 def walk_book_market(qty, prices, sizes):
+    # walk the book level by level until qty is filled or book is exhausted
     filled = 0.0
     notional = 0.0
     for p, s in zip(prices, sizes):
@@ -47,10 +48,10 @@ class ExecEnv(gym.Env):
 
         self.rng = np.random.default_rng(seed)
 
-        # Observation: [spread, trade_vol, signed_vol, imbalance, ret_1, remaining_frac, time_remaining_frac]
+        # observation: [spread, trade_vol, signed_vol, imbalance, ret_1, remaining_frac, time_remaining_frac]
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32)
 
-        # Action: fraction of remaining to trade now
+        # action: fraction of remaining inventory to trade at this step
         self.action_space = spaces.Box(
             low=np.array([0.0], dtype=np.float32),
             high=np.array([1.0], dtype=np.float32),
@@ -58,7 +59,7 @@ class ExecEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Episode state
+        # episode state
         self.start_idx = None
         self.t = None
         self.remaining_qty = None
@@ -111,7 +112,8 @@ class ExecEnv(gym.Env):
                 f"Parquet too short for horizon_steps={self.horizon_steps}: rows={len(self.df)}"
             )
 
-        self.start_idx = int(self.rng.integers(1, max_start))  # start at >=1 for ret_1
+        # start at >= 1 so ret_1 always has a previous row
+        self.start_idx = int(self.rng.integers(1, max_start))
         self.t = 0
 
         self.remaining_qty = self.target_qty
@@ -124,7 +126,7 @@ class ExecEnv(gym.Env):
         return self._obs(), {}
 
     def step(self, action):
-        # Accept action as scalar OR array-like
+        # accept action as scalar or array-like
         if np.isscalar(action):
             a0 = float(action)
         else:
@@ -138,15 +140,14 @@ class ExecEnv(gym.Env):
         mid_t = float(row["mid"])
         trade_vol = float(row["trade_vol"])
 
-        # Convert action -> child qty
+        # convert action fraction to child order size
         child_qty = a * self.remaining_qty
         child_qty = min(child_qty, self.max_child_qty)
 
-        # POV cap
+        # apply POV cap relative to recent traded volume
         if trade_vol > 0:
             child_qty = min(child_qty, self.pov_cap * trade_vol)
 
-        # Simulate fill
         if self.side == "buy":
             prices = row["ask_prices"]
             sizes = row["ask_sizes"]
@@ -164,7 +165,7 @@ class ExecEnv(gym.Env):
 
             fee_cash = self.taker_fee_rate * (filled * fill_price)
 
-            # Per-step cost vs current mid
+            # cost vs mid at this step
             if self.side == "buy":
                 step_cost = filled * (fill_price - mid_t) + fee_cash
             else:
@@ -172,15 +173,14 @@ class ExecEnv(gym.Env):
 
             self.is_cash_total += step_cost
 
-        # Reward (negative cost, normalised by arrival notional)
+        # reward is negative cost normalised by arrival notional
         denom = self.target_qty * self.arrival_mid
         reward = - (step_cost / denom) if denom > 0 else 0.0
 
-        # Advance time
         self.t += 1
         done = False
 
-        # Terminal: force liquidation
+        # terminal step — force liquidate any remaining inventory
         if self.t >= self.horizon_steps or self.remaining_qty <= 1e-12:
             done = True
             if self.remaining_qty > 1e-12:

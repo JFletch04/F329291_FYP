@@ -1,7 +1,6 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
-
 from agent.runner.lstm_policy import LSTMPolicy
 
 
@@ -27,16 +26,13 @@ def collect_trials(
 ) -> Tuple[Dict[str, np.ndarray], List[EpisodeStatsRL2]]:
     """
     RL²-style collection.
-
     Difference vs standard PPO collector:
       - policy.reset() happens ONCE per trial
       - hidden state persists across multiple episodes inside the same trial
       - env.reset() still happens at the start of each episode
-
     Output format intentionally matches the existing rollout dict interface so the
     current GAE / rollout buffer / PPO update code can be reused unchanged.
     """
-
     obs_all: List[np.ndarray] = []
     actions_all: List[np.ndarray] = []
     raw_u_all: List[float] = []
@@ -46,10 +42,10 @@ def collect_trials(
     dones_all: List[bool] = []
     h_all: List[np.ndarray] = []
     c_all: List[np.ndarray] = []
-
     ep_stats: List[EpisodeStatsRL2] = []
 
     for trial_id in range(n_trials):
+        # reset hidden state once per trial — persists across episodes within the trial
         policy.reset()
 
         for episode_in_trial in range(episodes_per_trial):
@@ -61,7 +57,6 @@ def collect_trials(
 
             while not done:
                 ps = policy.step(obs, deterministic=deterministic)
-
                 obs_all.append(obs.copy())
                 actions_all.append(ps.action.copy())
                 raw_u_all.append(ps.raw_u)
@@ -72,7 +67,6 @@ def collect_trials(
 
                 obs, reward, terminated, truncated, info = env.step(ps.action)
                 done = bool(terminated or truncated)
-
                 rewards_all.append(float(reward))
                 dones_all.append(done)
                 ep_ret += float(reward)

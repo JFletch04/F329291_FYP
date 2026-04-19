@@ -1,5 +1,4 @@
 # data/splits.py
-
 from pathlib import Path
 from typing import List, Tuple
 
@@ -20,10 +19,10 @@ def make_time_split(
     dec = list_parquets(dec_dir)
     jan = list_parquets(jan_dir)
 
+    # nov + dec = train, first n jan days = val, remainder = test
     train_files = nov + dec
     val_files = jan[:jan_val_days]
     test_files = jan[jan_val_days:]
-
     return train_files, val_files, test_files
 
 
