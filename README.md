@@ -12,13 +12,11 @@ source drl_exec/bin/activate
 pip install -r requirements.txt
 ```
 
-Project has been developed and tested on macOS with an Apple M-series CPU. No GPU required.
+This project has been developed and tested on macOS with an Apple M-series CPU. No GPU required.
 
 ---
 
 ## Project Structure
-
-```
 FinalYearProject/
 ├── agent/
 │   ├── models/actor_critic_lstm.py       # recurrent actor-critic network
@@ -41,34 +39,25 @@ FinalYearProject/
 ├── baselines/
 │   ├── TWAP/TWAP_tester.py               # TWAP baseline
 │   └── VWAP/                              # VWAP baseline and curve utilities
-├── checkpoints/
-│   ├── BTC/                               # pretrained PPO-LSTM checkpoints for BTC
-│   ├── DOGE/                              # pretrained PPO-LSTM checkpoints for DOGE
-│   ├── RL2_BTC/                           # RL² fine-tuned checkpoint for BTC
-│   └── RL2_DOGE/                          # RL² fine-tuned checkpoint for DOGE
 ├── eval_final.py                          # main evaluation script (PPO-LSTM + TWAP)
 ├── final_eval_rl2_btc.py                 # RL² evaluation script for BTC
 ├── final_eval_rl2_doge.py                # RL² evaluation script for DOGE
 ├── requirements.txt
 └── README.md
-```
 
 ---
 
 ## Data
 
-Hasnt been included due to the file size. Data is 92 days of Bybit L2 order book snapshots and trade records for BTC/USDT and DOGE/USDT (November 2025 — January 2026), which is preprocessed into fixed 5-second interval parquet files.
+The data hasnt been included due to the file sizes. The data is 92 days of Bybit L2 order book snapshots and trade records for BTC/USDT and DOGE/USDT (November 2025 — January 2026), which is preprocessed into fixed 5-second interval parquet files.
 
 Expected structure:
-
-```
 data_root/
 ├── November/
 │   ├── 2025-11-01_steps_5s.parquet
 │   └── ...
 ├── December/
 └── January/
-```
 
 To build from raw the Bybit feeds, update the file path variables at the top of `data/build_replay_day.py` or `data/build_replay_month.py` and run directly.
 
@@ -103,8 +92,6 @@ python agent/experiments/train_rl2_lstm.py \
     --rollout_trials 64 \
     --episodes_per_trial 4
 ```
-
-Pretrained checkpoints for the top three configurations per asset are already saved under `checkpoints/BTC/` and `checkpoints/DOGE/` and are what the evaluation scripts load by default.
 
 ---
 
@@ -154,3 +141,4 @@ The primary metric is `true_is_bps` — implementation shortfall in basis points
 - Hardcoded paths in `tests/` and `agent/experiments/` point to the original development machine and will need updating locally
 - `eval_final.py` and both RL² eval scripts use command-line arguments throughout — no path changes needed for evaluation
 - Transaction fees are set to zero throughout all experiments
+- Training logs, model checkpoints and experiment results have not been included in this submission. These were excluded as the submission requirements specified source code only.
